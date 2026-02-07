@@ -1,0 +1,255 @@
+.sidebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  /* width controlled by inline style */
+  background: var(--glass-bg);
+  backdrop-filter: blur(16px);
+  border-left: 1px solid var(--glass-border);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar.collapsed {
+  width: 56px !important;
+}
+
+.resizeHandle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 201;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resizeHandle:hover,
+.resizeHandle:active {
+  background: var(--accent-primary);
+  opacity: 0.5;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.logo {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-primary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.collapsed .logo {
+  display: none;
+}
+
+.collapseBtn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.collapseBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  padding: 3px;
+  gap: 1px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: all var(--transition-fast);
+  text-align: right;
+}
+
+.collapsed .tab {
+  justify-content: center;
+  padding: 5px;
+}
+
+.tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.tab.active {
+  color: var(--accent-primary);
+  background: var(--accent-primary-glow);
+}
+
+.tabIcon {
+  font-size: 14px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.tabLabel {
+  flex: 1;
+  text-align: right;
+}
+
+.badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  background: var(--accent-primary);
+  color: var(--bg-primary);
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panelContainer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--glass-border);
+  overflow: hidden;
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.panelTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.closeBtn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 16px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.closeBtn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.panelContent {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-2);
+  min-height: 0;
+}
+
+.panelLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: auto;
+    max-height: 60vh;
+    border-left: none;
+    border-top: 1px solid var(--glass-border);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    transform: translateY(calc(100% - 56px));
+    transition: transform 0.3s ease;
+  }
+
+  .sidebar.collapsed {
+    width: 100%;
+  }
+
+  .sidebar:has(.panelContainer) {
+    transform: translateY(0);
+  }
+
+  .header {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .tabs {
+    flex-direction: row;
+    overflow-x: auto;
+    padding: var(--space-2);
+    gap: var(--space-1);
+  }
+
+  .tab {
+    flex-direction: column;
+    padding: var(--space-2);
+    min-width: 56px;
+    gap: var(--space-1);
+  }
+
+  .tabLabel {
+    font-size: 10px;
+    text-align: center;
+  }
+
+  .badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    height: 14px;
+    font-size: 9px;
+  }
+
+  .tab {
+    position: relative;
+  }
+
+  .panelContent {
+    max-height: calc(60vh - 120px);
+  }
+}

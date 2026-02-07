@@ -1,0 +1,209 @@
+/**
+ * LOS Calculator scoped styles
+ * Scoped under .los-container to avoid conflicts with the main app
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+.los-container {
+  /* Color palette */
+  --bg-primary: #0a0a0c;
+  --bg-secondary: #131316;
+  --bg-tertiary: #1c1c21;
+  --bg-elevated: #222228;
+
+  /* Glass effect */
+  --glass-bg: rgba(19, 19, 22, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.04);
+
+  /* Text colors */
+  --text-primary: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-dimmed: #52525b;
+
+  /* Accent colors */
+  --accent-primary: #22d3ee;
+  --accent-primary-hover: #06b6d4;
+  --accent-primary-glow: rgba(34, 211, 238, 0.15);
+  --accent-secondary: #f43f5e;
+  --accent-secondary-glow: rgba(244, 63, 94, 0.15);
+  --accent-success: #10b981;
+  --accent-success-glow: rgba(16, 185, 129, 0.15);
+  --accent-warning: #f59e0b;
+
+  /* Typography */
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Border radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Transitions */
+  --transition-fast: 100ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+
+  font-family: var(--font-display);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.los-container a {
+  color: var(--accent-primary);
+  text-decoration: none;
+}
+
+.los-container button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+.los-container button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.los-container input,
+.los-container select,
+.los-container textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.los-container input:focus,
+.los-container select:focus,
+.los-container textarea:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-glow);
+}
+
+/* MapLibre overrides within LOS */
+.los-container .maplibregl-ctrl-group {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-md) !important;
+  overflow: hidden;
+}
+
+.los-container .maplibregl-ctrl-group button {
+  background: transparent !important;
+  border: none !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+.los-container .maplibregl-ctrl-group button:hover {
+  background: var(--glass-highlight) !important;
+}
+
+.los-container .maplibregl-ctrl-group button + button {
+  border-top: 1px solid var(--glass-border) !important;
+}
+
+.los-container .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1) brightness(0.85);
+}
+
+.los-container .maplibregl-ctrl-attrib {
+  background: transparent !important;
+  color: var(--text-dimmed) !important;
+  font-size: 9px !important;
+}
+
+.los-container .maplibregl-marker {
+  overflow: visible !important;
+}
+
+.los-container .maplibregl-popup-content {
+  background: var(--glass-bg) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-lg) !important;
+  padding: var(--space-3) !important;
+  color: var(--text-primary) !important;
+}
+
+.los-container .maplibregl-popup-tip {
+  border-top-color: var(--glass-bg) !important;
+}
+
+/* Scrollbar */
+.los-container ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.los-container ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.los-container ::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+}
+
+.los-container * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-tertiary) transparent;
+}
+
+/* Glass utility */
+.los-container .glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

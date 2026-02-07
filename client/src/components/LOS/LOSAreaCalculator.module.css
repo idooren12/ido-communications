@@ -1,0 +1,416 @@
+.container {
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.mapSection {
+  position: relative;
+  height: 350px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.map { width: 100%; height: 100%; }
+
+.mapControls {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  gap: 2px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
+
+.mapBtn {
+  padding: var(--space-1) var(--space-2);
+  font-size: 10px;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.mapBtn:hover { color: var(--text-secondary); }
+.mapBtn.active { color: var(--accent-primary); background: var(--accent-primary-glow); }
+
+.pickHint {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: var(--space-1) var(--space-2);
+  font-size: 10px;
+  color: var(--accent-primary);
+  background: var(--accent-primary-glow);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-md);
+}
+
+.legend {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.legendDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legendDot.clear { background: #10b981; }
+.legendDot.blocked { background: #f43f5e; }
+
+.panel {
+  padding: var(--space-3);
+}
+
+.panelContent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Mode Toggle */
+.modeToggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.modeBtn {
+  flex: 1;
+  padding: var(--space-1) var(--space-2);
+  font-size: 11px;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.modeBtn:hover { color: var(--text-primary); }
+.modeBtn.active {
+  color: var(--accent-primary);
+  background: var(--accent-primary-glow);
+  font-weight: 600;
+}
+
+.rfSettings {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.rfSettings label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.freqSelect {
+  padding: var(--space-1);
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+/* Point Card */
+.pointCard {
+  padding: var(--space-2);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.pointHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.pointLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pointDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.pointDot.pointA { background: var(--accent-primary); }
+
+.pickBtn {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.pickBtn:hover { color: var(--text-primary); }
+.pickBtn.active { color: var(--accent-primary); border-color: var(--accent-primary); }
+
+.coordsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inputLabel {
+  font-size: 9px;
+  color: var(--text-dimmed);
+  text-transform: uppercase;
+}
+
+.input {
+  padding: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+.heightRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.heightRow label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.heightInput {
+  width: 60px;
+  padding: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+.dragHint {
+  margin-top: var(--space-1);
+  font-size: 9px;
+  color: var(--text-dimmed);
+}
+
+/* Card (Parameters) */
+.card {
+  padding: var(--space-2);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.cardTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.unitToggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.unitToggle button {
+  padding: 2px 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.unitToggle button:hover { color: var(--text-primary); }
+.unitToggle button.active { color: var(--accent-primary); background: var(--accent-primary-glow); }
+
+.paramsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.pointEstimate {
+  margin-top: var(--space-2);
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Result Card */
+.resultCard {
+  padding: var(--space-2);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+
+.resultGrid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.resultRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.resultRow span:first-child {
+  color: var(--text-muted);
+}
+
+.resultRow span:last-child {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.statRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.clearDot, .blockedDot, .noDataDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.clearDot { background: #10b981; }
+.blockedDot { background: #f43f5e; }
+.noDataDot { background: #6b7280; }
+
+/* Actions */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.calculateBtn {
+  flex: 1;
+  padding: var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bg-primary);
+  background: var(--accent-primary);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.calculateBtn:hover:not(:disabled) { background: var(--accent-primary-hover); }
+.calculateBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.clearBtn {
+  padding: var(--space-2);
+  font-size: 11px;
+  color: var(--text-muted);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+}
+
+.clearBtn:hover { color: var(--text-primary); }
+
+.cancelBtn {
+  padding: var(--space-1) var(--space-2);
+  font-size: 11px;
+  color: var(--accent-secondary);
+  border: 1px solid var(--accent-secondary);
+  border-radius: var(--radius-md);
+}
+
+/* Progress */
+.progressBar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width 0.2s ease;
+}
+
+.progressText {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 36px;
+  text-align: center;
+}
+
+/* Marker */
+.markerOrigin {
+  cursor: grab;
+}
+
+.markerOrigin:active {
+  cursor: grabbing;
+}
+
+@media (max-width: 768px) {
+  .mapSection { height: 250px; }
+  .paramsGrid { grid-template-columns: 1fr; }
+  .coordsGrid { grid-template-columns: 1fr; }
+}

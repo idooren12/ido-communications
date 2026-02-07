@@ -1,0 +1,363 @@
+/* CustomDSMUploader styles */
+
+.container {
+  padding: var(--space-3);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-xl);
+}
+
+.header {
+  margin-bottom: var(--space-3);
+}
+
+.header h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Drop zone */
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 2px dashed rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-lg);
+  background: rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dropZone:hover {
+  border-color: rgba(34, 211, 238, 0.4);
+  background: rgba(34, 211, 238, 0.05);
+}
+
+.dropZone.dragOver {
+  border-color: var(--accent-primary);
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.dropZone.uploading {
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.dropIcon {
+  font-size: 32px;
+}
+
+.dropText {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.dropFormats {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Error */
+.error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: 11px;
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.2);
+  border-radius: var(--radius-md);
+}
+
+.error button {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.error button:hover {
+  opacity: 1;
+}
+
+/* Layers list */
+.layersList {
+  margin-top: var(--space-3);
+}
+
+.layersHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: var(--space-2);
+}
+
+.clearAllBtn {
+  padding: 2px 6px;
+  font-size: 10px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.clearAllBtn:hover {
+  opacity: 1;
+}
+
+.layerItem {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-1);
+  overflow: hidden;
+}
+
+.layerItem.expanded {
+  border-color: rgba(34, 211, 238, 0.2);
+}
+
+.layerHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.layerHeader:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.layerIcon {
+  font-size: 14px;
+}
+
+.layerName {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layerExpand {
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.removeBtn {
+  padding: 2px 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  transition: color 0.15s;
+}
+
+.removeBtn:hover {
+  color: #f43f5e;
+}
+
+/* Layer details */
+.layerDetails {
+  padding: var(--space-2);
+  padding-top: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.detailRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  padding: 3px 0;
+}
+
+.detailLabel {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.detailValue {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.editBoundsBtn {
+  width: 100%;
+  padding: var(--space-1);
+  margin-top: var(--space-2);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+  transition: all 0.15s;
+}
+
+.editBoundsBtn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Bounds editor */
+.boundsEditor {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--radius-sm);
+}
+
+.boundsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.boundsInput {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.boundsInput label {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.boundsInput input {
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-sm);
+}
+
+.boundsInput input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.boundsActions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.saveBtn, .cancelBtn {
+  flex: 1;
+  padding: var(--space-1);
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+}
+
+.saveBtn {
+  color: #0f172a;
+  background: var(--accent-primary);
+}
+
+.cancelBtn {
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Info */
+.info {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: var(--radius-md);
+}
+
+.infoIcon {
+  flex-shrink: 0;
+}
+
+/* Compact mode */
+.compactContainer {
+  position: relative;
+}
+
+.compactButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  transition: all 0.15s;
+}
+
+.compactButton:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.layerBadge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #0f172a;
+  background: var(--accent-primary);
+  border-radius: 50%;
+}
+
+.compactError {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 9px;
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.2);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

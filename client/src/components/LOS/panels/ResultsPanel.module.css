@@ -1,0 +1,242 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.clearAllBtn {
+  padding: var(--space-1) var(--space-2);
+  font-size: 11px;
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.clearAllBtn:hover {
+  background: rgba(244, 63, 94, 0.2);
+}
+
+.resultsList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.resultItem {
+  padding: var(--space-3);
+  background: var(--bg-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  transition: all var(--transition-fast);
+}
+
+.resultItem.hidden {
+  opacity: 0.5;
+}
+
+.resultHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.resultIcon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: white;
+  border-radius: var(--radius-md);
+  flex-shrink: 0;
+}
+
+.resultInfo {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.nameInput {
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.nameInput:hover {
+  border-color: var(--glass-border);
+  background: var(--bg-tertiary);
+}
+
+.nameInput:focus {
+  border-color: var(--accent-primary);
+  background: var(--bg-tertiary);
+}
+
+.resultMeta {
+  font-size: 10px;
+  color: var(--text-dimmed);
+}
+
+.statusBadge {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.statusBadge.clear {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.statusBadge.blocked {
+  background: rgba(244, 63, 94, 0.2);
+  color: #f43f5e;
+}
+
+.statusBadge.info {
+  background: rgba(34, 211, 238, 0.2);
+  color: #22d3ee;
+}
+
+.resultActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: var(--space-2);
+}
+
+.actionBtn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.actionBtn:hover {
+  color: var(--text-primary);
+  background: var(--glass-border);
+}
+
+.actionBtn.active {
+  color: var(--accent-primary);
+}
+
+.actionBtn.edit:hover {
+  color: #22d3ee;
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.actionBtn.delete:hover {
+  color: #f43f5e;
+  background: rgba(244, 63, 94, 0.1);
+}
+
+.colorPicker {
+  width: 28px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  cursor: pointer;
+}
+
+.colorPicker::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.colorPicker::-webkit-color-swatch {
+  border: none;
+  border-radius: 2px;
+}
+
+.resultDetails {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.detailRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.detailRow span:first-child {
+  color: var(--text-muted);
+}
+
+.detailRow span:last-child {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.positive {
+  color: #10b981 !important;
+}
+
+.negative {
+  color: #f43f5e !important;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-3);
+  text-align: center;
+}
+
+.emptyIcon {
+  font-size: 36px;
+  margin-bottom: var(--space-3);
+  opacity: 0.5;
+}
+
+.empty p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.emptyHint {
+  font-size: 11px !important;
+  color: var(--text-dimmed) !important;
+  margin-top: var(--space-2) !important;
+}
