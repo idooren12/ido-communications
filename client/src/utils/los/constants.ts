@@ -86,8 +86,12 @@ export const BASEMAP_SOURCES = {
   },
   esriSatellite: {
     type: 'raster' as const,
-    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    ],
     tileSize: 256,
+    maxzoom: 19,
     attribution: '\u00A9 Esri, Maxar, Earthstar Geographics',
   },
 };

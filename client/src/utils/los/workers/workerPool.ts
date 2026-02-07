@@ -279,6 +279,7 @@ export class WorkerPool {
   private initialized: boolean = false;
   private initPromise: Promise<void> | null = null;
   private workerBlobUrl: string | null = null;
+  private useFallback: boolean = false;
 
   constructor(options: WorkerPoolOptions = {}) {
     this.maxWorkers = options.maxWorkers || Math.min(navigator.hardwareConcurrency || 4, 8);
@@ -289,27 +290,79 @@ export class WorkerPool {
     if (this.initPromise) return this.initPromise;
 
     this.initPromise = new Promise<void>((resolve) => {
-      this.workerBlobUrl = createWorkerBlob();
+      try {
+        this.workerBlobUrl = createWorkerBlob();
+      } catch (e) {
+        console.warn('Failed to create worker blob, using main thread fallback:', e);
+        this.useFallback = true;
+        this.initialized = true;
+        resolve();
+        return;
+      }
+
       let readyCount = 0;
+      let errorCount = 0;
+
+      // Timeout: if workers don't respond within 5s, fall back to main thread
+      const timeout = setTimeout(() => {
+        if (!this.initialized) {
+          console.warn('Worker initialization timed out, using main thread fallback');
+          this.workers.forEach(w => w.terminate());
+          this.workers = [];
+          this.availableWorkers = [];
+          this.useFallback = true;
+          this.initialized = true;
+          resolve();
+        }
+      }, 5000);
 
       for (let i = 0; i < this.maxWorkers; i++) {
-        const worker = new Worker(this.workerBlobUrl);
+        try {
+          const worker = new Worker(this.workerBlobUrl!);
 
-        worker.onmessage = (e) => {
-          if (e.data.type === 'ready') {
-            readyCount++;
-            this.availableWorkers.push(worker);
-            if (readyCount === this.maxWorkers) {
+          worker.onmessage = (e) => {
+            if (e.data.type === 'ready') {
+              readyCount++;
+              this.availableWorkers.push(worker);
+              if (readyCount + errorCount === this.maxWorkers) {
+                clearTimeout(timeout);
+                this.initialized = true;
+                if (readyCount === 0) {
+                  this.useFallback = true;
+                }
+                resolve();
+              }
+            } else {
+              this.handleWorkerMessage(worker, e);
+            }
+          };
+
+          worker.onerror = (e) => {
+            console.warn('Worker error:', e);
+            errorCount++;
+            if (readyCount + errorCount === this.maxWorkers) {
+              clearTimeout(timeout);
               this.initialized = true;
+              if (readyCount === 0) {
+                this.useFallback = true;
+              }
               resolve();
             }
-          } else {
-            this.handleWorkerMessage(worker, e);
-          }
-        };
+          };
 
-        worker.onerror = (e) => console.error('Worker error:', e);
-        this.workers.push(worker);
+          this.workers.push(worker);
+        } catch (e) {
+          console.warn('Failed to create worker:', e);
+          errorCount++;
+          if (readyCount + errorCount === this.maxWorkers) {
+            clearTimeout(timeout);
+            this.initialized = true;
+            if (readyCount === 0) {
+              this.useFallback = true;
+            }
+            resolve();
+          }
+        }
       }
     });
 
@@ -351,6 +404,12 @@ export class WorkerPool {
 
   async execute<T, R>(type: string, payload: T, onProgress?: (progress: { current: number; total: number }) => void): Promise<R> {
     await this.initialize();
+
+    // Main-thread fallback when workers are unavailable
+    if (this.useFallback) {
+      return this.executeFallback<T, R>(type, payload);
+    }
+
     return new Promise<R>((resolve, reject) => {
       const task: WorkerTask<T, R> = {
         id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -361,8 +420,31 @@ export class WorkerPool {
     });
   }
 
+  private async executeFallback<T, R>(type: string, payload: T): Promise<R> {
+    // Lazy import to avoid circular dependency
+    const { calculateLOS } = await import('../los');
+    if (type === 'calculateLOS') {
+      const { pointA, pointB, options } = payload as any;
+      const result = await calculateLOS(pointA, pointB, undefined, options);
+      return result as unknown as R;
+    }
+    throw new Error(`Unknown task type for fallback: ${type}`);
+  }
+
   async executeAll<T, R>(type: string, payloads: T[], onProgress?: (completed: number, total: number) => void): Promise<R[]> {
     await this.initialize();
+
+    // In fallback mode, run sequentially to avoid overloading the main thread
+    if (this.useFallback) {
+      const results: R[] = [];
+      for (let i = 0; i < payloads.length; i++) {
+        const result = await this.executeFallback<T, R>(type, payloads[i]);
+        results.push(result);
+        onProgress?.(i + 1, payloads.length);
+      }
+      return results;
+    }
+
     let completed = 0;
     return Promise.all(payloads.map(payload =>
       this.execute<T, R>(type, payload).then(result => {

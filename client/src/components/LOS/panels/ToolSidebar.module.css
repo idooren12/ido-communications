@@ -187,6 +187,18 @@
   font-size: 12px;
 }
 
+/* Drag handle - hidden on desktop */
+.dragHandle {
+  display: none;
+}
+
+.dragHandleBar {
+  width: 40px;
+  height: 4px;
+  background: var(--glass-border);
+  border-radius: var(--radius-full);
+}
+
 /* Mobile */
 @media (max-width: 768px) {
   .sidebar {
@@ -195,9 +207,9 @@
     bottom: 0;
     left: 0;
     right: 0;
-    width: 100%;
+    width: 100% !important; /* Override inline style */
     height: auto;
-    max-height: 60vh;
+    max-height: 85vh;
     border-left: none;
     border-top: 1px solid var(--glass-border);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
@@ -206,15 +218,39 @@
   }
 
   .sidebar.collapsed {
-    width: 100%;
+    width: 100% !important;
   }
 
   .sidebar:has(.panelContainer) {
     transform: translateY(0);
   }
 
+  .resizeHandle {
+    display: none;
+  }
+
   .header {
-    padding: var(--space-2) var(--space-3);
+    display: none;
+  }
+
+  .dragHandle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) 0;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .dragHandle:active {
+    cursor: grabbing;
+  }
+
+  .dragHandleBar {
+    width: 40px;
+    height: 4px;
+    background: var(--text-dimmed);
+    border-radius: var(--radius-full);
   }
 
   .tabs {
@@ -229,6 +265,7 @@
     padding: var(--space-2);
     min-width: 56px;
     gap: var(--space-1);
+    position: relative;
   }
 
   .tabLabel {
@@ -245,11 +282,8 @@
     font-size: 9px;
   }
 
-  .tab {
-    position: relative;
-  }
-
   .panelContent {
-    max-height: calc(60vh - 120px);
+    flex: 1;
+    min-height: 0;
   }
 }

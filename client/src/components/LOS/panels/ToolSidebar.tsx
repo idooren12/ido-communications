@@ -1,6 +1,7 @@
 import React, { Suspense, useState, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLOSState, type PanelType } from '../../../contexts/LOSContext';
+import { useIsMobile } from '../../../utils/los/hooks';
 import styles from './ToolSidebar.module.css';
 
 const SIDEBAR_MIN_WIDTH = 200;
@@ -32,10 +33,15 @@ const tools: Tool[] = [
   { id: 'projects', labelKey: 'los.sidebar.projects', icon: '◎', shortcut: '6' },
 ];
 
+const MOBILE_MIN_HEIGHT = 56;  // Just tabs visible
+const MOBILE_MAX_HEIGHT_RATIO = 0.85; // Max 85% of viewport
+const LS_MOBILE_HEIGHT_KEY = 'los-sidebar-mobile-height';
+
 export default function ToolSidebar() {
   const { t } = useTranslation();
   const { state, setActivePanel, getResultsByType, toggleSidebar } = useLOSState();
   const { activePanel, sidebarCollapsed, results } = state;
+  const isMobile = useIsMobile();
 
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -48,6 +54,41 @@ export default function ToolSidebar() {
     return SIDEBAR_DEFAULT_WIDTH;
   });
   const isDragging = useRef(false);
+
+  // Mobile drag state
+  const [mobileHeight, setMobileHeight] = useState(() => {
+    try {
+      const saved = localStorage.getItem(LS_MOBILE_HEIGHT_KEY);
+      if (saved) return parseInt(saved, 10) || 0;
+    } catch {}
+    return 0; // 0 = use CSS default (transform-based)
+  });
+  const touchStartY = useRef(0);
+  const touchStartHeight = useRef(0);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+    touchStartHeight.current = mobileHeight || (activePanel ? window.innerHeight * 0.6 : MOBILE_MIN_HEIGHT);
+  }, [mobileHeight, activePanel]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const deltaY = touchStartY.current - e.touches[0].clientY;
+    const newHeight = Math.max(MOBILE_MIN_HEIGHT, Math.min(
+      window.innerHeight * MOBILE_MAX_HEIGHT_RATIO,
+      touchStartHeight.current + deltaY
+    ));
+    setMobileHeight(newHeight);
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    // Snap: if below tabs height + 30px, collapse to just tabs
+    if (mobileHeight < MOBILE_MIN_HEIGHT + 30) {
+      setMobileHeight(0);
+      setActivePanel(null);
+    } else {
+      try { localStorage.setItem(LS_MOBILE_HEIGHT_KEY, String(mobileHeight)); } catch {}
+    }
+  }, [mobileHeight, setActivePanel]);
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -118,13 +159,28 @@ export default function ToolSidebar() {
     setActivePanel(activePanel === toolId ? null : toolId);
   };
 
+  // Mobile: compute inline style for height-based positioning
+  const mobileStyle = isMobile && mobileHeight > 0
+    ? { transform: 'none', height: `${mobileHeight}px`, maxHeight: `${window.innerHeight * MOBILE_MAX_HEIGHT_RATIO}px` }
+    : {};
+
   return (
     <div
       className={`${styles.sidebar} ${sidebarCollapsed ? styles.collapsed : ''}`}
-      style={{ width: sidebarCollapsed ? 56 : sidebarWidth }}
+      style={{ width: sidebarCollapsed ? 56 : sidebarWidth, ...mobileStyle }}
     >
       {!sidebarCollapsed && (
         <div className={styles.resizeHandle} onMouseDown={handleResizeStart} />
+      )}
+      {isMobile && (
+        <div
+          className={styles.dragHandle}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        >
+          <div className={styles.dragHandleBar} />
+        </div>
       )}
       <div className={styles.header}>
         <h1 className={styles.logo}>{t('los.sidebar.title')}</h1>

@@ -467,8 +467,11 @@ export default function UnifiedMap() {
       const el = document.createElement('div');
       el.className = styles.marker;
       el.style.backgroundColor = p.color || '#22d3ee';
+      if (p.label) {
+        el.textContent = p.label;
+      }
 
-      const marker = new maplibregl.Marker({ element: el, draggable: true })
+      const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
         .setLngLat([p.lon, p.lat])
         .addTo(mapRef.current!);
 
@@ -748,15 +751,16 @@ export default function UnifiedMap() {
           </div>
         </div>`;
 
-      // Point A — simple dot
+      // Point A — labeled dot
       const elA = document.createElement('div');
       elA.className = styles.marker;
       elA.style.backgroundColor = r.color;
+      elA.textContent = 'A';
       const popupA = new maplibregl.Popup({ offset: 25, closeButton: true }).setHTML(
         buildPointPopup('A', 'A', r.params.pointA.lat, r.params.pointA.lon, r.params.pointA.height)
       );
       const origPosA: [number, number] = [r.params.pointA.lon, r.params.pointA.lat];
-      const markerA = new maplibregl.Marker({ element: elA, draggable: true })
+      const markerA = new maplibregl.Marker({ element: elA, draggable: true, anchor: 'center' })
         .setLngLat(origPosA)
         .setPopup(popupA)
         .addTo(mapRef.current!);
@@ -766,15 +770,16 @@ export default function UnifiedMap() {
       });
       markers.push(markerA);
 
-      // Point B — simple dot
+      // Point B — labeled dot
       const elB = document.createElement('div');
       elB.className = styles.marker;
       elB.style.backgroundColor = r.color;
+      elB.textContent = 'B';
       const popupB = new maplibregl.Popup({ offset: 25, closeButton: true }).setHTML(
         buildPointPopup('B', 'B', r.params.pointB.lat, r.params.pointB.lon, r.params.pointB.height)
       );
       const origPosB: [number, number] = [r.params.pointB.lon, r.params.pointB.lat];
-      const markerB = new maplibregl.Marker({ element: elB, draggable: true })
+      const markerB = new maplibregl.Marker({ element: elB, draggable: true, anchor: 'center' })
         .setLngLat(origPosB)
         .setPopup(popupB)
         .addTo(mapRef.current!);
