@@ -223,8 +223,8 @@ export default function LOSAreaPanel() {
     }
 
     const results: GridCell[] = [];
-    const batchSize = 5000;
-    const uiUpdateInterval = 10000; // Update map every 10000 points
+    const batchSize = 200;
+    const uiUpdateInterval = 1000; // Update map every 1000 points
 
     // Pick zoom level once based on max distance for consistent tile usage across all points
     const areaZoom = maxD > 100000 ? 10 : maxD > 50000 ? 11 : maxD > 10000 ? 12 : 13;
@@ -242,7 +242,11 @@ export default function LOSAreaPanel() {
       }));
 
       try {
-        const batchResults = await calculateBatchLOSAsync(tasks);
+        const batchResults = await calculateBatchLOSAsync(tasks, (completed, total) => {
+          // Update progress within batch
+          const overallCompleted = i + completed;
+          setProgress(Math.min(100, Math.round(overallCompleted / points.length * 100)));
+        });
         const mapped: GridCell[] = batch.map((p, idx) => {
           const r = batchResults[idx];
           return {
@@ -273,6 +277,8 @@ export default function LOSAreaPanel() {
         setGridCells(snapshot);
         setPreviewGridCells(snapshot);
       }
+      // Yield to UI thread between batches
+      await new Promise(r => setTimeout(r, 0));
     }
 
     // Ensure final state is set

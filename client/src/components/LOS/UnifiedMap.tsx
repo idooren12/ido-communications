@@ -143,7 +143,7 @@ export default function UnifiedMap() {
         version: 8,
         sources: { 'carto-dark': BASEMAP_SOURCES.cartoDark, 'esri-satellite': BASEMAP_SOURCES.esriSatellite, 'carto-labels': BASEMAP_SOURCES.cartoLabels },
         layers: [
-          { id: 'carto-dark-layer', type: 'raster', source: 'carto-dark', layout: { visibility: 'none' } },
+          { id: 'carto-dark-layer', type: 'raster', source: 'carto-dark', layout: { visibility: 'visible' } },
           { id: 'esri-satellite-layer', type: 'raster', source: 'esri-satellite', layout: { visibility: 'visible' } },
           { id: 'carto-labels-layer', type: 'raster', source: 'carto-labels', layout: { visibility: 'visible' } },
         ],
@@ -259,7 +259,8 @@ export default function UnifiedMap() {
   // Update basemap visibility
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
-    mapRef.current.setLayoutProperty('carto-dark-layer', 'visibility', basemap === 'map' ? 'visible' : 'none');
+    // Keep carto-dark always visible as fallback behind satellite (prevents black tiles)
+    mapRef.current.setLayoutProperty('carto-dark-layer', 'visibility', 'visible');
     mapRef.current.setLayoutProperty('esri-satellite-layer', 'visibility', basemap === 'satellite' ? 'visible' : 'none');
     mapRef.current.setLayoutProperty('carto-labels-layer', 'visibility', 'visible');
   }, [basemap, mapLoaded, mapRef]);
