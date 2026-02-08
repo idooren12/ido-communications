@@ -131,7 +131,7 @@ function calcLOS(origin, target, zoom, freqMHz) {
     return { clear: null, fresnelClear: null, distance: dist, hasData: false };
   }
 
-  const samples = Math.min(50, Math.max(5, Math.ceil(dist / 200)));
+  const samples = Math.min(150, Math.max(10, Math.ceil(dist / 100)));
   const wl = freqMHz ? SPEED_OF_LIGHT / (freqMHz * 1e6) : null;
 
   const startH = (oElev || 0) + (origin.height || 0);
