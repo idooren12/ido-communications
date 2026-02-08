@@ -131,7 +131,11 @@ function calcLOS(origin, target, zoom, freqMHz) {
     return { clear: null, fresnelClear: null, distance: dist, hasData: false };
   }
 
-  const samples = Math.min(150, Math.max(10, Math.ceil(dist / 100)));
+  // Sample at tile pixel resolution: one sample per pixel along the LOS path
+  // At zoom z, each pixel covers ~(40075km * cos(lat)) / (256 * 2^z) meters
+  // Approximate with equator-based resolution, capped to avoid excessive compute
+  const pixelSize = 40075000 / (256 * Math.pow(2, zoom));  // meters per pixel at equator
+  const samples = Math.min(500, Math.max(10, Math.ceil(dist / pixelSize)));
   const wl = freqMHz ? SPEED_OF_LIGHT / (freqMHz * 1e6) : null;
 
   const startH = (oElev || 0) + (origin.height || 0);
