@@ -283,23 +283,11 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
         },
         onPartialResult: (partialResults) => {
           if (cancelRef.current) return;
-          const mapped: GridCell[] = partialResults.map((r: any) => ({
-            lat: r.lat,
-            lon: r.lon,
-            clear: r.hasData === false ? null : (r.clear ?? null),
-            fresnelClear: r.fresnelClear ?? null,
-          }));
-          setGridCells(mapped);
+          setGridCells(partialResults as GridCell[]);
         },
         onComplete: (allResults) => {
           if (cancelRef.current) return;
-          const mapped: GridCell[] = allResults.map((r: any) => ({
-            lat: r.lat,
-            lon: r.lon,
-            clear: r.hasData === false ? null : (r.clear ?? null),
-            fresnelClear: r.fresnelClear ?? null,
-          }));
-          setGridCells(mapped);
+          setGridCells(allResults as GridCell[]);
         },
       });
     } catch (e) {

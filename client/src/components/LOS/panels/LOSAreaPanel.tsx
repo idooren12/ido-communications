@@ -238,27 +238,15 @@ export default function LOSAreaPanel() {
         },
         onPartialResult: (partialResults) => {
           if (cancelRef.current) return;
-          const mapped: GridCell[] = partialResults.map((r: any) => ({
-            lat: r.lat,
-            lon: r.lon,
-            clear: r.hasData === false ? null : (r.clear ?? null),
-            fresnelClear: r.fresnelClear ?? null,
-            distance: r.distance,
-          }));
-          setGridCells(mapped);
-          setPreviewGridCells(mapped);
+          // Pass results directly - they already have lat, lon, clear, fresnelClear, distance
+          // Avoid .map() which creates a full copy of millions of objects
+          setGridCells(partialResults as GridCell[]);
+          setPreviewGridCells(partialResults as GridCell[]);
         },
         onComplete: (allResults) => {
           if (cancelRef.current) return;
-          const mapped: GridCell[] = allResults.map((r: any) => ({
-            lat: r.lat,
-            lon: r.lon,
-            clear: r.hasData === false ? null : (r.clear ?? null),
-            fresnelClear: r.fresnelClear ?? null,
-            distance: r.distance,
-          }));
-          setGridCells(mapped);
-          setPreviewGridCells(mapped);
+          setGridCells(allResults as GridCell[]);
+          setPreviewGridCells(allResults as GridCell[]);
         },
       });
     } catch (e) {
