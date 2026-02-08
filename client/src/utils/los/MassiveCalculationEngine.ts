@@ -45,13 +45,13 @@ export interface EngineCallbacks {
 // Constants
 // ============================================================================
 
-const DEFAULT_CHUNK_SIZE = 500;  // Smaller for better progress updates
-const MAX_WORKERS = 4;
-const MAX_POINTS = 5000000;
-const TILE_CACHE_SIZE = 1000;  // Much larger cache
+const DEFAULT_CHUNK_SIZE = 2000;  // Larger chunks for fewer postMessage round-trips
+const MAX_WORKERS = Math.min(typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4, 12);
+const MAX_POINTS = 10000000;
+const TILE_CACHE_SIZE = 2000;
 const TILE_RETRY_COUNT = 3;
 const TILE_RETRY_DELAY = 500;
-const TILE_BATCH_SIZE = 8;  // Load tiles in smaller batches to avoid rate limiting
+const TILE_BATCH_SIZE = 20;  // Faster tile pre-loading
 
 // ============================================================================
 // Worker Code
@@ -223,7 +223,7 @@ class TileManager {
 
       // Small delay between batches to avoid rate limiting
       if (i + TILE_BATCH_SIZE < toLoad.length) {
-        await new Promise(r => setTimeout(r, 50));
+        await new Promise(r => setTimeout(r, 10));
       }
     }
 
@@ -412,7 +412,7 @@ class Engine {
     if (this.cancelled) return [];
 
     // Init workers
-    const numW = Math.min(MAX_WORKERS, Math.max(1, Math.ceil(points.length / 1000)));
+    const numW = Math.min(MAX_WORKERS, Math.max(2, Math.ceil(points.length / 5000)));
     this.pool = new WorkerPool(numW);
 
     const tileCounts = await this.pool.sendTiles(tileData);
@@ -472,8 +472,8 @@ class Engine {
       };
       cb.onProgress?.(prog);
 
-      // Partial results every 5 batches
-      if (i % (numW * 5) === 0 || i + numW >= chunks.length) {
+      // Partial results every 20 batches to reduce React re-renders
+      if (i % (numW * 20) === 0 || i + numW >= chunks.length) {
         cb.onPartialResult?.([...allResults], prog);
       }
     }
@@ -538,37 +538,43 @@ class Engine {
   }
 
   private getTileKeys(pts: Array<{ lat: number; lon: number }>, z: number, origin?: { lat: number; lon: number }): string[] {
-    const set = new Set<string>();
     const n = Math.pow(2, z);
 
-    const addTile = (lat: number, lon: number) => {
+    // Find bounding box of all points + origin
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    for (const p of pts) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lon < minLon) minLon = p.lon;
+      if (p.lon > maxLon) maxLon = p.lon;
+    }
+    if (origin) {
+      if (origin.lat < minLat) minLat = origin.lat;
+      if (origin.lat > maxLat) maxLat = origin.lat;
+      if (origin.lon < minLon) minLon = origin.lon;
+      if (origin.lon > maxLon) maxLon = origin.lon;
+    }
+
+    // Convert bounds to tile coordinates
+    const toTile = (lat: number, lon: number) => {
       lat = Math.max(-85.05, Math.min(85.05, lat));
       const latRad = lat * Math.PI / 180;
       const tx = Math.floor(((lon + 180) / 360) * n);
       const ty = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-      set.add(`${z}/${Math.max(0, Math.min(n-1, tx))}/${Math.max(0, Math.min(n-1, ty))}`);
+      return { tx: Math.max(0, Math.min(n - 1, tx)), ty: Math.max(0, Math.min(n - 1, ty)) };
     };
 
-    for (const p of pts) addTile(p.lat, p.lon);
-    if (origin) addTile(origin.lat, origin.lon);
+    const tl = toTile(maxLat, minLon);  // top-left (higher lat = lower tile Y)
+    const br = toTile(minLat, maxLon);  // bottom-right
 
-    // Also add tiles along paths (for LOS sampling)
-    if (origin && pts.length > 0) {
-      // Sample some intermediate points
-      const sampleCount = Math.min(pts.length, 100);
-      const step = Math.max(1, Math.floor(pts.length / sampleCount));
-      for (let i = 0; i < pts.length; i += step) {
-        const p = pts[i];
-        // Add a few intermediate tiles
-        for (let f = 0.25; f <= 0.75; f += 0.25) {
-          const midLat = origin.lat + (p.lat - origin.lat) * f;
-          const midLon = origin.lon + (p.lon - origin.lon) * f;
-          addTile(midLat, midLon);
-        }
+    // Enumerate all tiles in the bounding rectangle
+    const keys: string[] = [];
+    for (let tx = tl.tx; tx <= br.tx; tx++) {
+      for (let ty = tl.ty; ty <= br.ty; ty++) {
+        keys.push(`${z}/${tx}/${ty}`);
       }
     }
-
-    return Array.from(set);
+    return keys;
   }
 }
 

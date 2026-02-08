@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
-import { calculateLOS, type LOSPoint, RF_FREQUENCIES } from '../../utils/los/los';
-import { calculateBatchLOSAsync } from '../../utils/los/workers/workerPool';
-import { haversineDistance, destinationPoint, metersToDegreesLat, metersToDegreesLon } from '../../utils/los/geo';
+import { RF_FREQUENCIES } from '../../utils/los/los';
+import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress } from '../../utils/los/MassiveCalculationEngine';
+import { destinationPoint, metersToDegreesLat, metersToDegreesLon } from '../../utils/los/geo';
 import { ISRAEL_CENTER, TERRAIN_CONFIG, BASEMAP_SOURCES } from '../../utils/los/constants';
 import styles from './LOSAreaCalculator.module.css';
 
@@ -223,7 +223,7 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
     (map.getSource('coverage') as maplibregl.GeoJSONSource)?.setData({ type: 'FeatureCollection', features });
   }, [gridCells, mapLoaded, resolution, calcMode]);
 
-  // Calculate coverage
+  // Calculate coverage using MassiveCalculationEngine
   const handleCalculate = async () => {
     if (!origin) return;
     cancelRef.current = false;
@@ -234,7 +234,6 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
 
     const minD = toMeters(minDistance), maxD = toMeters(maxDistance), res = parseFloat(resolution) || 100;
     const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
-    const originPoint: LOSPoint = { lat: origin.lat, lon: origin.lon, antennaHeight: parseFloat(height) || 10 };
 
     // Generate all target points with wrap-around azimuth support
     const points: { lat: number; lon: number }[] = [];
@@ -242,72 +241,76 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
       const circumference = 2 * Math.PI * d;
       const angularRes = Math.max(0.5, (res / circumference) * 360);
 
-      // Normalize azimuths to 0-360 range
       const normMinAz = ((minAz % 360) + 360) % 360;
       const normMaxAz = ((maxAz % 360) + 360) % 360;
 
       if (normMinAz === normMaxAz || (normMinAz === 0 && normMaxAz === 360)) {
-        // Full circle
         for (let az = 0; az < 360; az += angularRes) {
-          const p = destinationPoint(origin.lat, origin.lon, az, d);
-          points.push(p);
+          points.push(destinationPoint(origin.lat, origin.lon, az, d));
         }
       } else if (normMinAz < normMaxAz) {
-        // Normal range (e.g., 45° to 135°)
         for (let az = normMinAz; az <= normMaxAz; az += angularRes) {
-          const p = destinationPoint(origin.lat, origin.lon, az, d);
-          points.push(p);
+          points.push(destinationPoint(origin.lat, origin.lon, az, d));
         }
       } else {
-        // Wrap-around range (e.g., 270° to 90°)
         for (let az = normMinAz; az < 360; az += angularRes) {
-          const p = destinationPoint(origin.lat, origin.lon, az, d);
-          points.push(p);
+          points.push(destinationPoint(origin.lat, origin.lon, az, d));
         }
         for (let az = 0; az <= normMaxAz; az += angularRes) {
-          const p = destinationPoint(origin.lat, origin.lon, az, d);
-          points.push(p);
+          points.push(destinationPoint(origin.lat, origin.lon, az, d));
         }
       }
     }
 
-    const options: any = {};
-    if (calcMode === 'rf') {
-      options.frequencyMHz = RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES];
-    }
+    const areaZoom = maxD > 100000 ? 10 : maxD > 50000 ? 11 : maxD > 10000 ? 12 : 13;
 
-    // Use Worker Pool for parallel calculation
-    const tasks = points.map(point => ({
-      pointA: originPoint,
-      pointB: { lat: point.lat, lon: point.lon, antennaHeight: parseFloat(targetHeight) || 2 },
-      options,
-    }));
+    const config: TaskConfig = {
+      origin: { lat: origin.lat, lon: origin.lon, height: parseFloat(height) || 10 },
+      targetHeight: parseFloat(targetHeight) || 2,
+      points,
+      zoom: areaZoom,
+      frequencyMHz: calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined,
+    };
 
     try {
-      const results = await calculateBatchLOSAsync(tasks, (completed, total) => {
-        if (!cancelRef.current) {
-          setProgress(Math.round(completed / total * 100));
-        }
+      await smartCalculate(config, {
+        onProgress: (prog: TaskProgress) => {
+          if (cancelRef.current) {
+            getMassiveEngine().cancel();
+            return;
+          }
+          setProgress(prog.percent);
+        },
+        onPartialResult: (partialResults) => {
+          if (cancelRef.current) return;
+          const mapped: GridCell[] = partialResults.map((r: any) => ({
+            lat: r.lat,
+            lon: r.lon,
+            clear: r.hasData === false ? null : (r.clear ?? null),
+            fresnelClear: r.fresnelClear ?? null,
+          }));
+          setGridCells(mapped);
+        },
+        onComplete: (allResults) => {
+          if (cancelRef.current) return;
+          const mapped: GridCell[] = allResults.map((r: any) => ({
+            lat: r.lat,
+            lon: r.lon,
+            clear: r.hasData === false ? null : (r.clear ?? null),
+            fresnelClear: r.fresnelClear ?? null,
+          }));
+          setGridCells(mapped);
+        },
       });
-
-      if (!cancelRef.current) {
-        const finalResults: GridCell[] = results.map((r: any, i: number) => ({
-          lat: points[i].lat,
-          lon: points[i].lon,
-          clear: r?.clear ?? null,
-          fresnelClear: r?.fresnelClear,
-        }));
-        setGridCells(finalResults);
-      }
     } catch (e) {
-      console.error('Worker calculation failed:', e);
+      console.error('Calculation failed:', e);
     }
 
     setCalcTime(performance.now() - startTime);
     setCalculating(false);
   };
 
-  const handleCancel = () => { cancelRef.current = true; setCalculating(false); };
+  const handleCancel = () => { cancelRef.current = true; getMassiveEngine().cancel(); setCalculating(false); };
 
   const stats = useMemo(() => {
     const withData = gridCells.filter(c => c.clear !== null);

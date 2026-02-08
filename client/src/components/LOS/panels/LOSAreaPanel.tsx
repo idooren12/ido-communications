@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RF_FREQUENCIES } from '../../../utils/los/los';
-import { calculateBatchLOSAsync } from '../../../utils/los/workers/workerPool';
-import { haversineDistance, initialBearing, destinationPoint, metersToDegreesLat, metersToDegreesLon } from '../../../utils/los/geo';
+import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress } from '../../../utils/los/MassiveCalculationEngine';
+import { haversineDistance, initialBearing, metersToDegreesLat, metersToDegreesLon } from '../../../utils/los/geo';
 import { useLOSState, type LOSAreaParams, type LOSAreaResultData, type GridCell } from '../../../contexts/LOSContext';
 import styles from './LOSAreaPanel.module.css';
 
@@ -180,9 +180,8 @@ export default function LOSAreaPanel() {
     const hOrigin = parseFloat(height) || 10;
     const hTarget = parseFloat(targetHeight) || 2;
 
-    const points: Array<{ lat: number; lon: number; bearing: number; distance: number }> = [];
-
     // Generate rectangular grid of points and filter by sector
+    const points: Array<{ lat: number; lon: number }> = [];
     const latStep = metersToDegreesLat(res);
     const lonStep = metersToDegreesLon(res, origin.lat);
 
@@ -197,100 +196,82 @@ export default function LOSAreaPanel() {
     const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
     const fullCircle = azRange === 0 || azRange >= 360;
 
-    for (let lat = latMin; lat <= latMax && !cancelRef.current; lat += latStep) {
-      for (let lon = lonMin; lon <= lonMax && !cancelRef.current; lon += lonStep) {
-        const dist = haversineDistance(origin.lat, origin.lon, lat, lon);
+    for (let pLat = latMin; pLat <= latMax && !cancelRef.current; pLat += latStep) {
+      for (let pLon = lonMin; pLon <= lonMax && !cancelRef.current; pLon += lonStep) {
+        const dist = haversineDistance(origin.lat, origin.lon, pLat, pLon);
         if (dist < minD || dist > maxD) continue;
 
         if (!fullCircle) {
-          const bearing = initialBearing(origin.lat, origin.lon, lat, lon);
-          // Check if bearing falls within the azimuth range
+          const bearing = initialBearing(origin.lat, origin.lon, pLat, pLon);
           const normBearing = ((bearing % 360) + 360) % 360;
           let inRange: boolean;
           if (normMinAz <= normMaxAz) {
             inRange = normBearing >= normMinAz && normBearing <= normMaxAz;
           } else {
-            // Wraps around 360 (e.g., 350 to 10)
             inRange = normBearing >= normMinAz || normBearing <= normMaxAz;
           }
           if (!inRange) continue;
-          points.push({ lat, lon, bearing, distance: dist });
-        } else {
-          const bearing = initialBearing(origin.lat, origin.lon, lat, lon);
-          points.push({ lat, lon, bearing, distance: dist });
         }
+        points.push({ lat: pLat, lon: pLon });
       }
     }
 
-    const results: GridCell[] = [];
-    const batchSize = 200;
-    const uiUpdateInterval = 1000; // Update map every 1000 points
-
-    // Pick zoom level once based on max distance for consistent tile usage across all points
+    // Pick zoom level based on max distance
     const areaZoom = maxD > 100000 ? 10 : maxD > 50000 ? 11 : maxD > 10000 ? 12 : 13;
-    const options: any = { sampleStepMeters: 30, maxSamples: 200, zoom: areaZoom };
-    if (calcMode === 'rf') {
-      options.frequencyMHz = RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES];
+
+    const config: TaskConfig = {
+      origin: { lat: origin.lat, lon: origin.lon, height: hOrigin },
+      targetHeight: hTarget,
+      points,
+      zoom: areaZoom,
+      frequencyMHz: calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined,
+    };
+
+    try {
+      await smartCalculate(config, {
+        onProgress: (prog: TaskProgress) => {
+          if (cancelRef.current) {
+            getMassiveEngine().cancel();
+            return;
+          }
+          setProgress(prog.percent);
+        },
+        onPartialResult: (partialResults) => {
+          if (cancelRef.current) return;
+          const mapped: GridCell[] = partialResults.map((r: any) => ({
+            lat: r.lat,
+            lon: r.lon,
+            clear: r.hasData === false ? null : (r.clear ?? null),
+            fresnelClear: r.fresnelClear ?? null,
+            distance: r.distance,
+          }));
+          setGridCells(mapped);
+          setPreviewGridCells(mapped);
+        },
+        onComplete: (allResults) => {
+          if (cancelRef.current) return;
+          const mapped: GridCell[] = allResults.map((r: any) => ({
+            lat: r.lat,
+            lon: r.lon,
+            clear: r.hasData === false ? null : (r.clear ?? null),
+            fresnelClear: r.fresnelClear ?? null,
+            distance: r.distance,
+          }));
+          setGridCells(mapped);
+          setPreviewGridCells(mapped);
+        },
+      });
+    } catch (e) {
+      console.error('Calculation failed:', e);
     }
 
-    for (let i = 0; i < points.length && !cancelRef.current; i += batchSize) {
-      const batch = points.slice(i, i + batchSize);
-      const tasks = batch.map(p => ({
-        pointA: { lat: origin.lat, lon: origin.lon, antennaHeight: hOrigin },
-        pointB: { lat: p.lat, lon: p.lon, antennaHeight: hTarget },
-        options
-      }));
-
-      try {
-        const batchResults = await calculateBatchLOSAsync(tasks, (completed, total) => {
-          // Update progress within batch
-          const overallCompleted = i + completed;
-          setProgress(Math.min(100, Math.round(overallCompleted / points.length * 100)));
-        });
-        const mapped: GridCell[] = batch.map((p, idx) => {
-          const r = batchResults[idx];
-          return {
-            lat: p.lat,
-            lon: p.lon,
-            clear: r?.clear ?? null,
-            fresnelClear: r?.fresnelClear ?? null,
-            bearing: p.bearing,
-            distance: p.distance,
-          };
-        });
-        results.push(...mapped);
-      } catch {
-        // If worker batch fails, mark all as null
-        const fallback: GridCell[] = batch.map(p => ({
-          lat: p.lat, lon: p.lon, clear: null, fresnelClear: null, bearing: p.bearing, distance: p.distance
-        }));
-        results.push(...fallback);
-      }
-
-      const completed = Math.min(i + batchSize, points.length);
-      setProgress(Math.min(100, Math.round(completed / points.length * 100)));
-      // Throttle state updates: only spread array at uiUpdateInterval or final batch
-      const isLastBatch = completed >= points.length;
-      const isUIUpdatePoint = completed % uiUpdateInterval < batchSize;
-      if (isUIUpdatePoint || isLastBatch) {
-        const snapshot = [...results];
-        setGridCells(snapshot);
-        setPreviewGridCells(snapshot);
-      }
-      // Yield to UI thread between batches
-      await new Promise(r => setTimeout(r, 0));
-    }
-
-    // Ensure final state is set
-    const finalSnapshot = [...results];
-    setGridCells(finalSnapshot);
-    setPreviewGridCells(finalSnapshot);
     setCalcTime(performance.now() - startTime);
     setCalculating(false);
   };
 
   const handleCancel = () => {
     cancelRef.current = true;
+    getMassiveEngine().cancel();
   };
 
   const handleSaveResult = () => {
