@@ -8,8 +8,8 @@ import styles from './LOSAreaPanel.module.css';
 
 type CalculationMode = 'optical' | 'rf';
 
-const MAX_POINTS_WARNING = 2000000;
-const MAX_POINTS_ABSOLUTE = 10000000;
+const MAX_POINTS_WARNING = 5000000;
+const MAX_POINTS_ABSOLUTE = 500000000;
 
 export default function LOSAreaPanel() {
   const { t } = useTranslation();
