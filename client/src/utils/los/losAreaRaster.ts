@@ -30,44 +30,6 @@ export interface GridBounds {
 }
 
 /**
- * Compute geographic bounds from grid cells with half-cell padding
- */
-function computeBounds(
-  cells: GridCell[],
-  resolution: number,
-  refLat: number,
-): GridBounds {
-  if (cells.length === 0) {
-    return { west: 0, south: 0, east: 0, north: 0 };
-  }
-
-  const halfLat = metersToDegreesLat(resolution) / 2;
-  const halfLon = metersToDegreesLon(resolution, refLat) / 2;
-
-  let minLat = Infinity, maxLat = -Infinity;
-  let minLon = Infinity, maxLon = -Infinity;
-
-  for (const cell of cells) {
-    if (cell.clear === null) continue;
-    if (cell.lat < minLat) minLat = cell.lat;
-    if (cell.lat > maxLat) maxLat = cell.lat;
-    if (cell.lon < minLon) minLon = cell.lon;
-    if (cell.lon > maxLon) maxLon = cell.lon;
-  }
-
-  if (!isFinite(minLat)) {
-    return { west: 0, south: 0, east: 0, north: 0 };
-  }
-
-  return {
-    west: minLon - halfLon,
-    south: minLat - halfLat,
-    east: maxLon + halfLon,
-    north: maxLat + halfLat,
-  };
-}
-
-/**
  * Convert grid cells to a raster image URL suitable for MapLibre ImageSource.
  *
  * Each grid cell maps to one pixel in the output image. The image is stretched
@@ -83,11 +45,33 @@ export function gridToImageUrl(
   resolution: number,
   refLat: number,
 ): RasterResult | null {
-  // Filter to cells with actual results
-  const validCells = cells.filter(c => c.clear !== null);
-  if (validCells.length === 0) return null;
+  if (cells.length === 0) return null;
 
-  const bounds = computeBounds(cells, resolution, refLat);
+  // Compute bounds and count valid cells in a single pass (avoid extra .filter())
+  const halfLat = metersToDegreesLat(resolution) / 2;
+  const halfLon = metersToDegreesLon(resolution, refLat) / 2;
+  let minLat = Infinity, maxLat = -Infinity;
+  let minLon = Infinity, maxLon = -Infinity;
+  let validCount = 0;
+
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (c.clear === null) continue;
+    validCount++;
+    if (c.lat < minLat) minLat = c.lat;
+    if (c.lat > maxLat) maxLat = c.lat;
+    if (c.lon < minLon) minLon = c.lon;
+    if (c.lon > maxLon) maxLon = c.lon;
+  }
+
+  if (validCount === 0) return null;
+
+  const bounds: GridBounds = {
+    west: minLon - halfLon,
+    south: minLat - halfLat,
+    east: maxLon + halfLon,
+    north: maxLat + halfLat,
+  };
   if (bounds.east <= bounds.west || bounds.north <= bounds.south) return null;
 
   const latStep = metersToDegreesLat(resolution);
@@ -100,14 +84,14 @@ export function gridToImageUrl(
   // Safety: cap canvas size to prevent memory issues
   const maxDim = 4096;
   if (width > maxDim || height > maxDim) {
-    // Scale down if too large
     const scale = maxDim / Math.max(width, height);
     const scaledWidth = Math.max(1, Math.round(width * scale));
     const scaledHeight = Math.max(1, Math.round(height * scale));
-    return renderScaled(validCells, bounds, scaledWidth, scaledHeight, latStep, lonStep);
+    // Pass all cells directly - render functions skip null cells
+    return renderScaled(cells, bounds, scaledWidth, scaledHeight, latStep, lonStep);
   }
 
-  return render(validCells, bounds, width, height, latStep, lonStep);
+  return render(cells, bounds, width, height, latStep, lonStep);
 }
 
 function render(
@@ -129,10 +113,11 @@ function render(
   const data = imageData.data;
 
   // Paint each cell as a single pixel
-  for (const cell of cells) {
-    // Map lat/lon to pixel coordinates
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    if (cell.clear === null) continue;
+
     const px = Math.floor((cell.lon - bounds.west) / lonStep);
-    // Flip Y: north is top (row 0), south is bottom
     const py = Math.floor((bounds.north - cell.lat) / latStep);
 
     if (px < 0 || px >= width || py < 0 || py >= height) continue;
@@ -183,7 +168,10 @@ function renderScaled(
   const lonRange = bounds.east - bounds.west;
   const latRange = bounds.north - bounds.south;
 
-  for (const cell of cells) {
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    if (cell.clear === null) continue;
+
     const px = Math.floor(((cell.lon - bounds.west) / lonRange) * width);
     const py = Math.floor(((bounds.north - cell.lat) / latRange) * height);
 

@@ -236,12 +236,15 @@ export default function LOSAreaPanel() {
           }
           setProgress(prog.percent);
         },
-        onPartialResult: (partialResults) => {
+        onPartialResult: (partialResults, prog) => {
           if (cancelRef.current) return;
-          // Pass results directly - they already have lat, lon, clear, fresnelClear, distance
-          // Avoid .map() which creates a full copy of millions of objects
           setGridCells(partialResults as GridCell[]);
-          setPreviewGridCells(partialResults as GridCell[]);
+          // Only update map preview at low frequency to avoid expensive raster re-renders
+          // For large calcs, only update every ~25% progress
+          const threshold = points.length > 1000000 ? 25 : points.length > 100000 ? 10 : 5;
+          if (prog.percent % threshold < 2) {
+            setPreviewGridCells(partialResults as GridCell[]);
+          }
         },
         onComplete: (allResults) => {
           if (cancelRef.current) return;
