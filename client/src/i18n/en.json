@@ -347,7 +347,13 @@
       "clickMapHint": "Click on the map",
       "doubleClickFinish": "Double-click to finish",
       "metersShort": "m",
-      "peakLabel": "Peak"
+      "peakLabel": "Peak",
+      "elevationLegend": "Elevation",
+      "polygon": "Polygon",
+      "drawElevPolygon": "Draw",
+      "clearElevPolygon": "Clear",
+      "elevDrawing": "Drawing...",
+      "elevPolygonHint": "Click to add points, double-click to finish"
     },
     "losLine": {
       "title": "Line Calculation",
@@ -447,7 +453,12 @@
       "azimuthRange": "Azimuth range",
       "estimatedPoints": "Estimated points",
       "tooManyPoints": "Too many points: {{count}} (max: {{max}})",
-      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?"
+      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?",
+      "sectorMode": "Sector",
+      "polygonMode": "Polygon",
+      "drawPolygon": "Draw polygon",
+      "finishDrawing": "Finish drawing",
+      "pointsCount": "points"
     },
     "peakFinder": {
       "title": "Peak Finder",

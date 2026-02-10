@@ -3,13 +3,14 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import { ISRAEL_CENTER, ISRAEL_DEFAULT_ZOOM, ELEVATION_RANGES, TERRAIN_CONFIG, BASEMAP_SOURCES } from '../../utils/los/constants';
-import { haversineDistance, initialBearing, sphericalPolygonArea, formatDistance, formatArea, destinationPoint, metersToDegreesLat, metersToDegreesLon, type LatLon } from '../../utils/los/geo';
+import { haversineDistance, initialBearing, sphericalPolygonArea, formatDistance, formatArea, destinationPoint, metersToDegreesLat, metersToDegreesLon, pointInPolygon, type LatLon } from '../../utils/los/geo';
 import { useIsMobile, useElevation } from '../../utils/los/hooks';
-import { sampleElevationAtLngLat, calculateViewportMinMax } from '../../utils/los/elevation';
+import { sampleElevationAtLngLat, calculateViewportMinMax, batchSampleElevations } from '../../utils/los/elevation';
 import { registerElevtintProtocol, updateElevationLUT, getTintTilesTemplate } from '../../utils/los/elevtintProtocol';
 import { useLOSState, isLOSLineResult, isLOSAreaResult, isPeakFinderResult } from '../../contexts/LOSContext';
 import { gridToImageUrl } from '../../utils/los/losAreaRaster';
 import type { GeocodingResult } from '../../utils/los/geocoding';
+import ElevationLegend from './ElevationLegend';
 import styles from './UnifiedMap.module.css';
 
 type MeasureMode = 'none' | 'distance' | 'area';
@@ -17,7 +18,7 @@ type ScaleMode = 'fixed' | 'viewport';
 
 export default function UnifiedMap() {
   const { t } = useTranslation();
-  const { state, mapRef, updateMapState, getVisibleResults, mapClickHandler, previewPoints, setPreviewPoints, previewPolygon, previewLine, previewSector, previewPeaks, previewGridCells, removeResult, previewDragHandler, editResultInPanel } = useLOSState();
+  const { state, mapRef, updateMapState, getVisibleResults, mapClickHandler, setMapClickHandler, previewPoints, setPreviewPoints, previewPolygon, setPreviewPolygon, previewLine, previewSector, previewPeaks, previewGridCells, removeResult, previewDragHandler, editResultInPanel } = useLOSState();
   const mapContainer = useRef<HTMLDivElement>(null);
   const searchMarkerRef = useRef<{ marker: maplibregl.Marker; popup: maplibregl.Popup } | null>(null);
   const resultMarkersRef = useRef<Map<string, maplibregl.Marker[]>>(new Map());
@@ -36,6 +37,7 @@ export default function UnifiedMap() {
   const [cursorPosition, setCursorPosition] = useState<{ lng: number; lat: number } | null>(null);
   const [zoom, setZoom] = useState(ISRAEL_DEFAULT_ZOOM);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [elevRange, setElevRange] = useState({ min: ELEVATION_RANGES.fixed.min, max: ELEVATION_RANGES.fixed.max });
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<GeocodingResult[]>([]);
@@ -44,6 +46,12 @@ export default function UnifiedMap() {
   const [measureMode, setMeasureMode] = useState<MeasureMode>('none');
   const [measurePoints, setMeasurePoints] = useState<LatLon[]>([]);
   const [measureFinished, setMeasureFinished] = useState(false);
+
+  // Elevation polygon drawing
+  const [elevPolygonDrawing, setElevPolygonDrawing] = useState(false);
+  const [elevPolygonPoints, setElevPolygonPoints] = useState<LatLon[]>([]);
+  const [elevPolygonLoading, setElevPolygonLoading] = useState(false);
+  const elevPolygonDrawingRef = useRef(false);
 
   const isMobile = useIsMobile();
   const { elevation, loading: elevationLoading } = useElevation(cursorPosition, zoom, TERRAIN_CONFIG.url, TERRAIN_CONFIG.encoding);
@@ -297,6 +305,7 @@ export default function UnifiedMap() {
 
     if (scaleMode === 'fixed') {
       updateElevationLUT(ELEVATION_RANGES.fixed.min, ELEVATION_RANGES.fixed.max);
+      setElevRange({ min: ELEVATION_RANGES.fixed.min, max: ELEVATION_RANGES.fixed.max });
       setTimeout(safeSetTiles, 100);
       return;
     }
@@ -306,6 +315,7 @@ export default function UnifiedMap() {
       const result = await calculateViewportMinMax({ west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() }, Math.floor(mapRef.current.getZoom()), TERRAIN_CONFIG.url, TERRAIN_CONFIG.encoding);
       if (result) {
         updateElevationLUT(result.min, result.max);
+        setElevRange({ min: result.min, max: result.max });
         safeSetTiles();
       }
     };
@@ -313,6 +323,120 @@ export default function UnifiedMap() {
     mapRef.current.on('moveend', update);
     return () => { clearTimeout(timeout); mapRef.current?.off('moveend', update); };
   }, [scaleMode, mapLoaded, mapRef]);
+
+  // Elevation polygon drawing ref sync
+  useEffect(() => { elevPolygonDrawingRef.current = elevPolygonDrawing; }, [elevPolygonDrawing]);
+
+  // Elevation polygon drawing handler
+  useEffect(() => {
+    if (!elevPolygonDrawing) return;
+
+    setMapClickHandler((e) => {
+      if (elevPolygonDrawingRef.current) {
+        setElevPolygonPoints(prev => [...prev, { lat: e.lngLat.lat, lon: e.lngLat.lng }]);
+      }
+    }, 'crosshair');
+
+    const handleDblClick = (mapEvent: any) => {
+      if (elevPolygonDrawingRef.current) {
+        mapEvent.preventDefault?.();
+        setElevPolygonDrawing(false);
+      }
+    };
+
+    if (mapRef.current) {
+      mapRef.current.on('dblclick', handleDblClick);
+    }
+
+    return () => {
+      setMapClickHandler(null);
+      if (mapRef.current) {
+        mapRef.current.off('dblclick', handleDblClick);
+      }
+    };
+  }, [elevPolygonDrawing, setMapClickHandler, mapRef]);
+
+  // Update preview polygon for elevation drawing
+  useEffect(() => {
+    if (elevPolygonPoints.length > 0) {
+      setPreviewPolygon({ points: elevPolygonPoints, color: '#f59e0b' });
+    } else {
+      setPreviewPolygon(null);
+    }
+  }, [elevPolygonPoints, setPreviewPolygon]);
+
+  // Calculate elevation range within polygon
+  const calculatePolygonElevRange = useCallback(async () => {
+    if (elevPolygonPoints.length < 3) return;
+    setElevPolygonLoading(true);
+
+    try {
+      // Compute bounding box
+      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+      for (const p of elevPolygonPoints) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
+
+      // Sample every ~200m inside polygon
+      const step = 200;
+      const latStep = metersToDegreesLat(step);
+      const lonStep = metersToDegreesLon(step, (minLat + maxLat) / 2);
+      const samplePoints: Array<{ lng: number; lat: number }> = [];
+
+      for (let lat = minLat; lat <= maxLat; lat += latStep) {
+        for (let lon = minLon; lon <= maxLon; lon += lonStep) {
+          if (pointInPolygon(lat, lon, elevPolygonPoints)) {
+            samplePoints.push({ lng: lon, lat });
+          }
+        }
+      }
+
+      if (samplePoints.length === 0) {
+        setElevPolygonLoading(false);
+        return;
+      }
+
+      // Cap samples to prevent excessive load
+      const maxSamples = 5000;
+      const sampled = samplePoints.length > maxSamples
+        ? samplePoints.filter((_, i) => i % Math.ceil(samplePoints.length / maxSamples) === 0)
+        : samplePoints;
+
+      const elevations = await batchSampleElevations(sampled, 12, TERRAIN_CONFIG.url, TERRAIN_CONFIG.encoding);
+      const valid = elevations.filter((e): e is number => e !== null);
+
+      if (valid.length > 0) {
+        const minE = Math.floor(Math.min(...valid));
+        const maxE = Math.ceil(Math.max(...valid));
+        updateElevationLUT(minE, maxE);
+        setElevRange({ min: minE, max: maxE });
+
+        // Refresh tiles
+        try {
+          const source = mapRef.current?.getSource('elevation-tint') as maplibregl.RasterTileSource;
+          if (source && typeof source.setTiles === 'function') {
+            source.setTiles([getTintTilesTemplate()]);
+          }
+        } catch (e) { /* ignore */ }
+
+        setScaleMode('fixed'); // Switch to fixed to prevent viewport overwriting
+      }
+    } catch (e) {
+      console.error('Error calculating polygon elevation:', e);
+    } finally {
+      setElevPolygonLoading(false);
+    }
+  }, [elevPolygonPoints, mapRef]);
+
+  // Auto-calculate when polygon drawing finishes (3+ points and not drawing)
+  useEffect(() => {
+    if (!elevPolygonDrawing && elevPolygonPoints.length >= 3) {
+      calculatePolygonElevRange();
+    }
+  }, [elevPolygonDrawing, elevPolygonPoints.length, calculatePolygonElevRange]);
 
   // Measure mode handlers
   useEffect(() => {
@@ -572,66 +696,78 @@ export default function UnifiedMap() {
         }
       }
 
-      // Generate sector boundary polygon
-      const normMinAz = ((minAzimuth % 360) + 360) % 360;
-      const normMaxAz = ((maxAzimuth % 360) + 360) % 360;
-      const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
-      const fullCircle = azRange === 0 || azRange >= 360;
-      const angularStep = fullCircle ? 5 : Math.max(1, azRange / 72);
-      const effectiveAzRange = fullCircle ? 360 : azRange;
-
-      const outerArc: [number, number][] = [];
-      for (let az = 0; az <= effectiveAzRange; az += angularStep) {
-        const bearing = (normMinAz + az) % 360;
-        const p = destinationPoint(origin.lat, origin.lon, bearing, maxDistance);
-        outerArc.push([p.lon, p.lat]);
-      }
-      if (!fullCircle) {
-        const endOuter = destinationPoint(origin.lat, origin.lon, normMaxAz, maxDistance);
-        outerArc.push([endOuter.lon, endOuter.lat]);
-      }
-
-      const innerArc: [number, number][] = [];
-      if (minDistance > 0) {
-        for (let az = effectiveAzRange; az >= 0; az -= angularStep) {
-          const bearing = (normMinAz + az) % 360;
-          const p = destinationPoint(origin.lat, origin.lon, bearing, minDistance);
-          innerArc.push([p.lon, p.lat]);
-        }
-        const startInner = destinationPoint(origin.lat, origin.lon, normMinAz, minDistance);
-        innerArc.push([startInner.lon, startInner.lat]);
-      }
-
-      let boundaryRing: [number, number][];
-      if (fullCircle && minDistance > 0) {
-        const outerRing = [...outerArc]; outerRing.push(outerRing[0]);
-        const innerRing: [number, number][] = [];
-        for (let az = 0; az <= 360; az += angularStep) {
-          const bearing = (normMinAz + az) % 360;
-          const p = destinationPoint(origin.lat, origin.lon, bearing, minDistance);
-          innerRing.push([p.lon, p.lat]);
-        }
-        innerRing.push(innerRing[0]);
+      // Generate boundary - polygon or sector
+      if (r.params.polygon && r.params.polygon.length >= 3) {
+        // Polygon boundary
+        const coords = r.params.polygon.map(p => [p.lon, p.lat] as [number, number]);
+        coords.push(coords[0]); // close ring
         losAreaBoundaryFeatures.push({
           type: 'Feature',
           properties: { id: r.id, color: r.color || '#22d3ee' },
-          geometry: { type: 'MultiLineString', coordinates: [outerRing, innerRing] }
+          geometry: { type: 'LineString', coordinates: coords }
         });
-        boundaryRing = [];
-      } else if (fullCircle && minDistance === 0) {
-        boundaryRing = [...outerArc]; boundaryRing.push(boundaryRing[0]);
-      } else if (minDistance > 0) {
-        boundaryRing = [...outerArc, ...innerArc]; boundaryRing.push(boundaryRing[0]);
       } else {
-        boundaryRing = [[origin.lon, origin.lat], ...outerArc, [origin.lon, origin.lat]];
-      }
+        // Sector boundary
+        const normMinAz = ((minAzimuth % 360) + 360) % 360;
+        const normMaxAz = ((maxAzimuth % 360) + 360) % 360;
+        const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
+        const fullCircle = azRange === 0 || azRange >= 360;
+        const angularStep = fullCircle ? 5 : Math.max(1, azRange / 72);
+        const effectiveAzRange = fullCircle ? 360 : azRange;
 
-      if (boundaryRing.length > 0) {
-        losAreaBoundaryFeatures.push({
-          type: 'Feature',
-          properties: { id: r.id, color: r.color || '#22d3ee' },
-          geometry: { type: 'LineString', coordinates: boundaryRing }
-        });
+        const outerArc: [number, number][] = [];
+        for (let az = 0; az <= effectiveAzRange; az += angularStep) {
+          const bearing = (normMinAz + az) % 360;
+          const p = destinationPoint(origin.lat, origin.lon, bearing, maxDistance);
+          outerArc.push([p.lon, p.lat]);
+        }
+        if (!fullCircle) {
+          const endOuter = destinationPoint(origin.lat, origin.lon, normMaxAz, maxDistance);
+          outerArc.push([endOuter.lon, endOuter.lat]);
+        }
+
+        const innerArc: [number, number][] = [];
+        if (minDistance > 0) {
+          for (let az = effectiveAzRange; az >= 0; az -= angularStep) {
+            const bearing = (normMinAz + az) % 360;
+            const p = destinationPoint(origin.lat, origin.lon, bearing, minDistance);
+            innerArc.push([p.lon, p.lat]);
+          }
+          const startInner = destinationPoint(origin.lat, origin.lon, normMinAz, minDistance);
+          innerArc.push([startInner.lon, startInner.lat]);
+        }
+
+        let boundaryRing: [number, number][];
+        if (fullCircle && minDistance > 0) {
+          const outerRing = [...outerArc]; outerRing.push(outerRing[0]);
+          const innerRing: [number, number][] = [];
+          for (let az = 0; az <= 360; az += angularStep) {
+            const bearing = (normMinAz + az) % 360;
+            const p = destinationPoint(origin.lat, origin.lon, bearing, minDistance);
+            innerRing.push([p.lon, p.lat]);
+          }
+          innerRing.push(innerRing[0]);
+          losAreaBoundaryFeatures.push({
+            type: 'Feature',
+            properties: { id: r.id, color: r.color || '#22d3ee' },
+            geometry: { type: 'MultiLineString', coordinates: [outerRing, innerRing] }
+          });
+          boundaryRing = [];
+        } else if (fullCircle && minDistance === 0) {
+          boundaryRing = [...outerArc]; boundaryRing.push(boundaryRing[0]);
+        } else if (minDistance > 0) {
+          boundaryRing = [...outerArc, ...innerArc]; boundaryRing.push(boundaryRing[0]);
+        } else {
+          boundaryRing = [[origin.lon, origin.lat], ...outerArc, [origin.lon, origin.lat]];
+        }
+
+        if (boundaryRing.length > 0) {
+          losAreaBoundaryFeatures.push({
+            type: 'Feature',
+            properties: { id: r.id, color: r.color || '#22d3ee' },
+            geometry: { type: 'LineString', coordinates: boundaryRing }
+          });
+        }
       }
     });
 
@@ -934,7 +1070,7 @@ export default function UnifiedMap() {
             <div className={styles.settingGroup}><span className={styles.settingLabel}>{t('los.map.display')}</span><div className={styles.settingBtns}><button className={`${styles.settingBtn} ${basemap==='map'?styles.active:''}`} onClick={()=>setBasemap('map')}>{t('los.map.mapView')}</button><button className={`${styles.settingBtn} ${basemap==='satellite'?styles.active:''}`} onClick={()=>setBasemap('satellite')}>{t('los.map.satellite')}</button></div></div>
             <div className={styles.settingDivider}/>
             <div className={styles.settingGroup}><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.elevationMap')}</span><button className={`${styles.toggleBtn} ${elevationTintVisible?styles.active:''}`} onClick={()=>setElevationTintVisible(!elevationTintVisible)}>{elevationTintVisible?t('los.map.active'):t('los.map.inactive')}</button></div>
-              {elevationTintVisible && <><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.scale')}</span><div className={styles.settingBtns}><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='fixed'?styles.active:''}`} onClick={()=>setScaleMode('fixed')}>{t('los.map.fixed')}</button><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='viewport'?styles.active:''}`} onClick={()=>setScaleMode('viewport')}>{t('los.map.display')}</button></div></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.opacity')}</span><input type="range" min="0.1" max="1" step="0.05" value={elevationOpacity} onChange={e=>setElevationOpacity(parseFloat(e.target.value))} className={styles.opacitySlider}/></div></>}
+              {elevationTintVisible && <><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.scale')}</span><div className={styles.settingBtns}><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='fixed'?styles.active:''}`} onClick={()=>setScaleMode('fixed')}>{t('los.map.fixed')}</button><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='viewport'?styles.active:''}`} onClick={()=>setScaleMode('viewport')}>{t('los.map.display')}</button></div></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.opacity')}</span><input type="range" min="0.1" max="1" step="0.05" value={elevationOpacity} onChange={e=>setElevationOpacity(parseFloat(e.target.value))} className={styles.opacitySlider}/></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.polygon')}</span>{elevPolygonDrawing ? <button className={`${styles.toggleBtn} ${styles.active}`} onClick={()=>setElevPolygonDrawing(false)}>{t('los.map.elevDrawing')}</button> : elevPolygonPoints.length > 0 ? <button className={styles.toggleBtn} onClick={()=>{setElevPolygonPoints([]);setPreviewPolygon(null);setScaleMode('fixed');}}>{t('los.map.clearElevPolygon')}</button> : <button className={styles.toggleBtn} onClick={()=>{setElevPolygonDrawing(true);setElevPolygonPoints([]);}}>{t('los.map.drawElevPolygon')}</button>}</div>{elevPolygonDrawing && <div className={styles.measureHint}>{t('los.map.elevPolygonHint')}</div>}{elevPolygonLoading && <div className={styles.measureHint}>{t('common.loading')}</div>}</>}
             </div>
             <div className={styles.settingDivider}/>
             <div className={styles.settingGroup}><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.boundaries')}</span><button className={`${styles.toggleBtn} ${showBoundaries?styles.active:''}`} onClick={()=>setShowBoundaries(!showBoundaries)}>{showBoundaries?t('los.map.active'):t('los.map.inactive')}</button></div></div>
@@ -954,6 +1090,7 @@ export default function UnifiedMap() {
           </div>}
         </div>
       </div>
+      <ElevationLegend minElevation={elevRange.min} maxElevation={elevRange.max} visible={elevationTintVisible} />
       <div className={styles.bottomBar}>
         <div className={styles.searchSection} ref={searchSectionRef}>
           <div className={styles.searchInputWrapper}>

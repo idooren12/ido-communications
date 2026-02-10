@@ -347,7 +347,13 @@
       "clickMapHint": "לחץ על המפה",
       "doubleClickFinish": "לחיצה כפולה לסיום",
       "metersShort": "מ'",
-      "peakLabel": "פסגה"
+      "peakLabel": "פסגה",
+      "elevationLegend": "מקרא גבהים",
+      "polygon": "מצולע",
+      "drawElevPolygon": "צייר",
+      "clearElevPolygon": "נקה",
+      "elevDrawing": "מצייר...",
+      "elevPolygonHint": "לחץ להוספת נקודות, לחיצה כפולה לסיום"
     },
     "losLine": {
       "title": "חישוב קו",
@@ -447,7 +453,12 @@
       "azimuthRange": "טווח אזימוט",
       "estimatedPoints": "נקודות משוערות",
       "tooManyPoints": "יותר מדי נקודות: {{count}} (מקסימום: {{max}})",
-      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?"
+      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?",
+      "sectorMode": "סקטור",
+      "polygonMode": "מצולע",
+      "drawPolygon": "צייר מצולע",
+      "finishDrawing": "סיים ציור",
+      "pointsCount": "נקודות"
     },
     "peakFinder": {
       "title": "מציאת פסגות",

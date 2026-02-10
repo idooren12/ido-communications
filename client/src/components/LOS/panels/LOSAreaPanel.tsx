@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next';
 import { RF_FREQUENCIES } from '../../../utils/los/los';
 import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress } from '../../../utils/los/MassiveCalculationEngine';
-import { haversineDistance, initialBearing, metersToDegreesLat, metersToDegreesLon } from '../../../utils/los/geo';
+import { haversineDistance, initialBearing, metersToDegreesLat, metersToDegreesLon, pointInPolygon, sphericalPolygonArea, type LatLon } from '../../../utils/los/geo';
 import { useLOSState, type LOSAreaParams, type LOSAreaResultData, type GridCell } from '../../../contexts/LOSContext';
 import styles from './LOSAreaPanel.module.css';
 
@@ -13,9 +13,15 @@ const MAX_POINTS_ABSOLUTE = 500000000;
 
 export default function LOSAreaPanel() {
   const { t } = useTranslation();
-  const { mapRef, addResult, setMapClickHandler, setPreviewPoints, setPreviewSector, setPreviewGridCells, setPreviewDragHandler, editingResultData, clearEditingResultData } = useLOSState();
+  const { mapRef, addResult, setMapClickHandler, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells, setPreviewDragHandler, editingResultData, clearEditingResultData } = useLOSState();
   const cancelRef = useRef(false);
   const pickingOriginRef = useRef(false);
+  const drawingPolygonRef = useRef(false);
+
+  type AreaMode = 'sector' | 'polygon';
+  const [areaMode, setAreaMode] = useState<AreaMode>('sector');
+  const [drawingPolygon, setDrawingPolygon] = useState(false);
+  const [polygonPoints, setPolygonPoints] = useState<LatLon[]>([]);
 
   const [pickingOrigin, setPickingOrigin] = useState(false);
   const [lat, setLat] = useState('');
@@ -38,7 +44,8 @@ export default function LOSAreaPanel() {
   const [calcTime, setCalcTime] = useState<number | null>(null);
 
   useEffect(() => { pickingOriginRef.current = pickingOrigin; }, [pickingOrigin]);
-  useEffect(() => { setGridCells([]); setPreviewGridCells([]); setCalcTime(null); }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency, setPreviewGridCells]);
+  useEffect(() => { drawingPolygonRef.current = drawingPolygon; }, [drawingPolygon]);
+  useEffect(() => { setGridCells([]); setPreviewGridCells([]); setCalcTime(null); }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency, polygonPoints.length, areaMode, setPreviewGridCells]);
 
   // Register drag handler for preview markers (NaN = delete point)
   useEffect(() => {
@@ -87,54 +94,79 @@ export default function LOSAreaPanel() {
   }, [lat, lon]);
 
   const estimatedPointCount = useMemo(() => {
+    const res = parseFloat(resolution) || 100;
+    const cellArea = res * res;
+
+    if (areaMode === 'polygon') {
+      if (polygonPoints.length < 3) return 0;
+      const area = sphericalPolygonArea(polygonPoints);
+      return Math.ceil(area / cellArea);
+    }
+
     if (!origin) return 0;
-    const minD = toMeters(minDistance), maxD = toMeters(maxDistance), res = parseFloat(resolution) || 100;
+    const minD = toMeters(minDistance), maxD = toMeters(maxDistance);
     const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
     const normMinAz = ((minAz % 360) + 360) % 360;
     const normMaxAz = ((maxAz % 360) + 360) % 360;
     const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
     const fullCircle = azRange === 0 || azRange >= 360;
-    // Approximate: area of the annular sector / area per grid cell
     const sectorFraction = fullCircle ? 1 : (azRange / 360);
     const areaSquareMeters = Math.PI * (maxD * maxD - minD * minD) * sectorFraction;
-    const cellArea = res * res;
     return Math.ceil(areaSquareMeters / cellArea);
-  }, [origin, minDistance, maxDistance, resolution, minAzimuth, maxAzimuth, toMeters]);
+  }, [origin, minDistance, maxDistance, resolution, minAzimuth, maxAzimuth, toMeters, areaMode, polygonPoints]);
 
-  // Update preview point and sector when parameters change
+  // Update preview point and sector/polygon when parameters change
   useEffect(() => {
-    if (origin) {
-      setPreviewPoints([{ lat: origin.lat, lon: origin.lon, label: '⊙', name: t('los.losArea.origin'), color: '#22d3ee' }]);
-
-      // Also show the sector preview
-      const minD = toMeters(minDistance);
-      const maxD = toMeters(maxDistance);
-      const minAz = parseFloat(minAzimuth) || 0;
-      const maxAz = parseFloat(maxAzimuth) || 360;
-
-      if (maxD > 0) {
-        setPreviewSector({
-          origin: { lat: origin.lat, lon: origin.lon },
-          minDistance: minD,
-          maxDistance: maxD,
-          minAzimuth: minAz,
-          maxAzimuth: maxAz,
-          resolution: parseFloat(resolution) || 100,
-          color: '#22d3ee'
-        });
+    if (areaMode === 'polygon') {
+      // Polygon mode - show polygon preview, clear sector
+      setPreviewSector(null);
+      if (polygonPoints.length > 0) {
+        setPreviewPolygon({ points: polygonPoints, color: '#22d3ee' });
+      } else {
+        setPreviewPolygon(null);
+      }
+      // Show origin if set
+      if (origin) {
+        setPreviewPoints([{ lat: origin.lat, lon: origin.lon, label: '⊙', name: t('los.losArea.origin'), color: '#22d3ee' }]);
+      } else {
+        setPreviewPoints([]);
       }
     } else {
-      setPreviewPoints([]);
-      setPreviewSector(null);
+      // Sector mode - show sector preview, clear polygon
+      setPreviewPolygon(null);
+      if (origin) {
+        setPreviewPoints([{ lat: origin.lat, lon: origin.lon, label: '⊙', name: t('los.losArea.origin'), color: '#22d3ee' }]);
+
+        const minD = toMeters(minDistance);
+        const maxD = toMeters(maxDistance);
+        const minAz = parseFloat(minAzimuth) || 0;
+        const maxAz = parseFloat(maxAzimuth) || 360;
+
+        if (maxD > 0) {
+          setPreviewSector({
+            origin: { lat: origin.lat, lon: origin.lon },
+            minDistance: minD,
+            maxDistance: maxD,
+            minAzimuth: minAz,
+            maxAzimuth: maxAz,
+            resolution: parseFloat(resolution) || 100,
+            color: '#22d3ee'
+          });
+        }
+      } else {
+        setPreviewPoints([]);
+        setPreviewSector(null);
+      }
     }
     return () => {
       setPreviewPoints([]);
       setPreviewSector(null);
+      setPreviewPolygon(null);
       setPreviewGridCells([]);
     };
-  }, [origin, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, toMeters, setPreviewPoints, setPreviewSector, setPreviewGridCells]);
+  }, [origin, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, toMeters, areaMode, polygonPoints, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells]);
 
-  // Register click handler
+  // Register click handler for origin picking
   useEffect(() => {
     if (pickingOrigin) {
       setMapClickHandler((e) => {
@@ -145,17 +177,47 @@ export default function LOSAreaPanel() {
           setGridCells([]);
         }
       }, 'crosshair');
-    } else {
+    } else if (!drawingPolygon) {
       setMapClickHandler(null);
     }
 
     return () => {
-      setMapClickHandler(null);
+      if (!drawingPolygonRef.current) setMapClickHandler(null);
     };
-  }, [pickingOrigin, setMapClickHandler]);
+  }, [pickingOrigin, drawingPolygon, setMapClickHandler]);
+
+  // Register click handler for polygon drawing
+  useEffect(() => {
+    if (!drawingPolygon) return;
+
+    setMapClickHandler((e) => {
+      if (drawingPolygonRef.current) {
+        setPolygonPoints(prev => [...prev, { lat: e.lngLat.lat, lon: e.lngLat.lng }]);
+      }
+    }, 'crosshair');
+
+    const handleDblClick = (mapEvent: any) => {
+      if (drawingPolygonRef.current) {
+        mapEvent.preventDefault?.();
+        setDrawingPolygon(false);
+      }
+    };
+
+    if (mapRef.current) {
+      mapRef.current.on('dblclick', handleDblClick);
+    }
+
+    return () => {
+      setMapClickHandler(null);
+      if (mapRef.current) {
+        mapRef.current.off('dblclick', handleDblClick);
+      }
+    };
+  }, [drawingPolygon, setMapClickHandler, mapRef]);
 
   const handleCalculate = async () => {
     if (!origin) return;
+    if (areaMode === 'polygon' && polygonPoints.length < 3) return;
 
     // Check point count
     if (estimatedPointCount > MAX_POINTS_ABSOLUTE) {
@@ -174,45 +236,68 @@ export default function LOSAreaPanel() {
     setGridCells([]);
     const startTime = performance.now();
 
-    const minD = toMeters(minDistance), maxD = toMeters(maxDistance);
     const res = parseFloat(resolution) || 100;
-    const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
     const hOrigin = parseFloat(height) || 10;
     const hTarget = parseFloat(targetHeight) || 2;
 
-    // Generate rectangular grid of points and filter by sector
     const points: Array<{ lat: number; lon: number }> = [];
     const latStep = metersToDegreesLat(res);
     const lonStep = metersToDegreesLon(res, origin.lat);
+    let maxD: number;
 
-    const latMin = origin.lat - metersToDegreesLat(maxD);
-    const latMax = origin.lat + metersToDegreesLat(maxD);
-    const lonMin = origin.lon - metersToDegreesLon(maxD, origin.lat);
-    const lonMax = origin.lon + metersToDegreesLon(maxD, origin.lat);
+    if (areaMode === 'polygon' && polygonPoints.length >= 3) {
+      // Polygon mode: generate grid inside polygon
+      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+      for (const p of polygonPoints) {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lon < minLon) minLon = p.lon;
+        if (p.lon > maxLon) maxLon = p.lon;
+      }
 
-    // Normalize azimuth range
-    const normMinAz = ((minAz % 360) + 360) % 360;
-    const normMaxAz = ((maxAz % 360) + 360) % 360;
-    const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
-    const fullCircle = azRange === 0 || azRange >= 360;
-
-    for (let pLat = latMin; pLat <= latMax && !cancelRef.current; pLat += latStep) {
-      for (let pLon = lonMin; pLon <= lonMax && !cancelRef.current; pLon += lonStep) {
-        const dist = haversineDistance(origin.lat, origin.lon, pLat, pLon);
-        if (dist < minD || dist > maxD) continue;
-
-        if (!fullCircle) {
-          const bearing = initialBearing(origin.lat, origin.lon, pLat, pLon);
-          const normBearing = ((bearing % 360) + 360) % 360;
-          let inRange: boolean;
-          if (normMinAz <= normMaxAz) {
-            inRange = normBearing >= normMinAz && normBearing <= normMaxAz;
-          } else {
-            inRange = normBearing >= normMinAz || normBearing <= normMaxAz;
-          }
-          if (!inRange) continue;
+      for (let pLat = minLat; pLat <= maxLat && !cancelRef.current; pLat += latStep) {
+        for (let pLon = minLon; pLon <= maxLon && !cancelRef.current; pLon += lonStep) {
+          if (!pointInPolygon(pLat, pLon, polygonPoints)) continue;
+          points.push({ lat: pLat, lon: pLon });
         }
-        points.push({ lat: pLat, lon: pLon });
+      }
+
+      // Max distance for zoom calculation = diagonal of bounding box
+      maxD = haversineDistance(minLat, minLon, maxLat, maxLon);
+    } else {
+      // Sector mode: generate grid filtered by sector
+      const minD = toMeters(minDistance);
+      maxD = toMeters(maxDistance);
+      const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
+
+      const latMin = origin.lat - metersToDegreesLat(maxD);
+      const latMax = origin.lat + metersToDegreesLat(maxD);
+      const lonMin = origin.lon - metersToDegreesLon(maxD, origin.lat);
+      const lonMax = origin.lon + metersToDegreesLon(maxD, origin.lat);
+
+      const normMinAz = ((minAz % 360) + 360) % 360;
+      const normMaxAz = ((maxAz % 360) + 360) % 360;
+      const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
+      const fullCircle = azRange === 0 || azRange >= 360;
+
+      for (let pLat = latMin; pLat <= latMax && !cancelRef.current; pLat += latStep) {
+        for (let pLon = lonMin; pLon <= lonMax && !cancelRef.current; pLon += lonStep) {
+          const dist = haversineDistance(origin.lat, origin.lon, pLat, pLon);
+          if (dist < minD || dist > maxD) continue;
+
+          if (!fullCircle) {
+            const bearing = initialBearing(origin.lat, origin.lon, pLat, pLon);
+            const normBearing = ((bearing % 360) + 360) % 360;
+            let inRange: boolean;
+            if (normMinAz <= normMaxAz) {
+              inRange = normBearing >= normMinAz && normBearing <= normMaxAz;
+            } else {
+              inRange = normBearing >= normMinAz || normBearing <= normMaxAz;
+            }
+            if (!inRange) continue;
+          }
+          points.push({ lat: pLat, lon: pLon });
+        }
       }
     }
 
@@ -288,6 +373,7 @@ export default function LOSAreaPanel() {
       resolution: res,
       mode: calcMode,
       rfFrequency: calcMode === 'rf' ? rfFrequency : undefined,
+      polygon: areaMode === 'polygon' && polygonPoints.length >= 3 ? polygonPoints : undefined,
     };
 
     const resultData: LOSAreaResultData = {
@@ -407,25 +493,61 @@ export default function LOSAreaPanel() {
         <div className={styles.cardHeader}>
           <span>{t('los.losArea.scanSettings')}</span>
           <div className={styles.unitToggle}>
-            <button className={distanceUnit === 'm' ? styles.active : ''} onClick={() => setDistanceUnit('m')}>{t('los.common.meters')}</button>
-            <button className={distanceUnit === 'km' ? styles.active : ''} onClick={() => setDistanceUnit('km')}>{t('los.common.km')}</button>
+            <button className={areaMode === 'sector' ? styles.active : ''} onClick={() => { setAreaMode('sector'); setDrawingPolygon(false); handleClearResults(); }}>{t('los.losArea.sectorMode')}</button>
+            <button className={areaMode === 'polygon' ? styles.active : ''} onClick={() => { setAreaMode('polygon'); handleClearResults(); }}>{t('los.losArea.polygonMode')}</button>
           </div>
         </div>
 
-        <div className={styles.rangeRow}>
-          <label>{t('los.losArea.distanceRange')}:</label>
-          <input type="number" value={minDistance} onChange={e => setMinDistance(e.target.value)} className={styles.rangeInput} />
-          <span>-</span>
-          <input type="number" value={maxDistance} onChange={e => setMaxDistance(e.target.value)} className={styles.rangeInput} />
-        </div>
+        {areaMode === 'sector' ? (
+          <>
+            <div className={styles.rangeRow}>
+              <label>{t('los.losArea.distanceRange')}:</label>
+              <div className={styles.unitToggle} style={{ marginLeft: 'auto' }}>
+                <button className={distanceUnit === 'm' ? styles.active : ''} onClick={() => setDistanceUnit('m')}>{t('los.common.meters')}</button>
+                <button className={distanceUnit === 'km' ? styles.active : ''} onClick={() => setDistanceUnit('km')}>{t('los.common.km')}</button>
+              </div>
+            </div>
+            <div className={styles.rangeRow}>
+              <input type="number" value={minDistance} onChange={e => setMinDistance(e.target.value)} className={styles.rangeInput} />
+              <span>-</span>
+              <input type="number" value={maxDistance} onChange={e => setMaxDistance(e.target.value)} className={styles.rangeInput} />
+            </div>
 
-        <div className={styles.rangeRow}>
-          <label>{t('los.losArea.azimuthRange')}:</label>
-          <input type="number" value={minAzimuth} onChange={e => setMinAzimuth(e.target.value)} className={styles.rangeInput} />
-          <span>-</span>
-          <input type="number" value={maxAzimuth} onChange={e => setMaxAzimuth(e.target.value)} className={styles.rangeInput} />
-          <span>°</span>
-        </div>
+            <div className={styles.rangeRow}>
+              <label>{t('los.losArea.azimuthRange')}:</label>
+              <input type="number" value={minAzimuth} onChange={e => setMinAzimuth(e.target.value)} className={styles.rangeInput} />
+              <span>-</span>
+              <input type="number" value={maxAzimuth} onChange={e => setMaxAzimuth(e.target.value)} className={styles.rangeInput} />
+              <span>°</span>
+            </div>
+          </>
+        ) : (
+          <div className={styles.polygonSection}>
+            <div className={styles.rangeRow}>
+              {drawingPolygon ? (
+                <button className={`${styles.pickBtn} ${styles.active}`} onClick={() => setDrawingPolygon(false)} style={{ flex: 1 }}>
+                  {t('los.losArea.finishDrawing')} ({polygonPoints.length})
+                </button>
+              ) : polygonPoints.length >= 3 ? (
+                <>
+                  <span className={styles.inputLabel}>{polygonPoints.length} {t('los.losArea.pointsCount')}</span>
+                  <button className={styles.pickBtn} onClick={() => { setPolygonPoints([]); setPreviewPolygon(null); }}>
+                    {t('los.common.clear')}
+                  </button>
+                </>
+              ) : (
+                <button className={styles.pickBtn} onClick={() => { setDrawingPolygon(true); setPolygonPoints([]); }} style={{ flex: 1 }}>
+                  {t('los.losArea.drawPolygon')}
+                </button>
+              )}
+            </div>
+            {drawingPolygon && (
+              <div className={styles.pickHint} style={{ marginTop: 'var(--space-2)', padding: 'var(--space-2)', fontSize: '11px' }}>
+                {t('los.map.elevPolygonHint')}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className={styles.resolutionRow}>
           <label>{t('los.losArea.resolution')} ({t('los.common.meters')}):</label>
@@ -478,7 +600,7 @@ export default function LOSAreaPanel() {
         <button
           className={styles.calculateBtn}
           onClick={handleCalculate}
-          disabled={calculating || !origin}
+          disabled={calculating || !origin || (areaMode === 'polygon' && polygonPoints.length < 3)}
         >
           {calculating ? t('los.losArea.calculating') : t('los.losArea.calculate')}
         </button>

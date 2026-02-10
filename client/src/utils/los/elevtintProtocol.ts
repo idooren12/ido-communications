@@ -11,29 +11,26 @@ let registered = false;
 let currentLUT: Uint8ClampedArray | null = null;
 let lutVersion = 0;
 
-// Improved elevation gradient - natural terrain colors
-const GRADIENT_STOPS = [
-  { elevation: -450, color: '#08306b' },  // Deep blue (Dead Sea)
-  { elevation: -300, color: '#08519c' },
-  { elevation: -150, color: '#2171b5' },
-  { elevation: -50, color: '#4292c6' },
-  { elevation: 0, color: '#6baed6' },     // Sea level - light blue
-  { elevation: 25, color: '#1a5f3c' },    // Coast - dark green
-  { elevation: 100, color: '#2d6a4f' },
-  { elevation: 200, color: '#40916c' },
-  { elevation: 350, color: '#52b788' },   // Hills - medium green
-  { elevation: 500, color: '#74c69d' },
-  { elevation: 650, color: '#95d5b2' },   // Higher hills - light green
-  { elevation: 800, color: '#b7e4c7' },
-  { elevation: 950, color: '#d8f3dc' },   // Transition to brown
-  { elevation: 1100, color: '#ddb892' },  // Mountains - tan
-  { elevation: 1300, color: '#b08968' },
-  { elevation: 1500, color: '#9c6644' },  // High mountains - brown
-  { elevation: 1700, color: '#7f5539' },
-  { elevation: 1900, color: '#6b4423' },
-  { elevation: 2100, color: '#5c3d2e' },  // Peaks
-  { elevation: 2300, color: '#8b7355' },  // Rocky peaks
-  { elevation: 2500, color: '#d4d4d4' },  // Snow/rock
+// Classic topographic elevation gradient
+export const GRADIENT_STOPS = [
+  { elevation: -450, color: '#1a6e7a' },  // Deep teal (Dead Sea)
+  { elevation: -200, color: '#2a9d8f' },  // Teal
+  { elevation: 0, color: '#73c8a9' },     // Sea level - light teal
+  { elevation: 25, color: '#1b7a3d' },    // Coast - deep green
+  { elevation: 100, color: '#2d8f4e' },   // Low coastal
+  { elevation: 200, color: '#4caf50' },   // Green
+  { elevation: 350, color: '#7bc67e' },   // Medium green
+  { elevation: 500, color: '#a5d6a7' },   // Light green
+  { elevation: 650, color: '#c8e6a0' },   // Yellow-green
+  { elevation: 800, color: '#e6ee9c' },   // Pale yellow
+  { elevation: 950, color: '#f0e68c' },   // Yellow
+  { elevation: 1100, color: '#dcc07a' },  // Tan
+  { elevation: 1300, color: '#c4a265' },  // Light brown
+  { elevation: 1500, color: '#a67c52' },  // Brown
+  { elevation: 1700, color: '#8b5e3c' },  // Dark brown
+  { elevation: 1900, color: '#6d4c2e' },  // Very dark brown
+  { elevation: 2100, color: '#c0b0a0' },  // Gray-brown (rocky)
+  { elevation: 2500, color: '#f0ece8' },  // Near white (peaks)
 ];
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {

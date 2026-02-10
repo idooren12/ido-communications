@@ -38,6 +38,7 @@ export interface LOSAreaParams {
   resolution: number;
   mode: 'optical' | 'rf';
   rfFrequency?: string;
+  polygon?: Array<{ lat: number; lon: number }>;
 }
 
 export interface GridCell {
