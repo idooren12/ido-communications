@@ -6,7 +6,7 @@ import { ISRAEL_CENTER, ISRAEL_DEFAULT_ZOOM, ELEVATION_RANGES, TERRAIN_CONFIG, B
 import { haversineDistance, initialBearing, sphericalPolygonArea, formatDistance, formatArea, destinationPoint, metersToDegreesLat, metersToDegreesLon, pointInPolygon, type LatLon } from '../../utils/los/geo';
 import { useIsMobile, useElevation } from '../../utils/los/hooks';
 import { sampleElevationAtLngLat, calculateViewportMinMax, batchSampleElevations } from '../../utils/los/elevation';
-import { registerElevtintProtocol, updateElevationLUT, getTintTilesTemplate } from '../../utils/los/elevtintProtocol';
+import { registerElevtintProtocol, updateElevationLUT, getTintTilesTemplate, setClipPolygon } from '../../utils/los/elevtintProtocol';
 import { useLOSState, isLOSLineResult, isLOSAreaResult, isPeakFinderResult } from '../../contexts/LOSContext';
 import { gridToImageUrl } from '../../utils/los/losAreaRaster';
 import type { GeocodingResult } from '../../utils/los/geocoding';
@@ -362,7 +362,11 @@ export default function UnifiedMap() {
       setPreviewPolygon({ points: elevPolygonPoints, color: '#f59e0b' });
     } else {
       setPreviewPolygon(null);
+      setClipPolygon(null);
     }
+    return () => {
+      setClipPolygon(null);
+    };
   }, [elevPolygonPoints, setPreviewPolygon]);
 
   // Calculate elevation range within polygon
@@ -413,6 +417,7 @@ export default function UnifiedMap() {
         const maxE = Math.ceil(Math.max(...valid));
         updateElevationLUT(minE, maxE);
         setElevRange({ min: minE, max: maxE });
+        setClipPolygon(elevPolygonPoints);
 
         // Refresh tiles
         try {
@@ -1070,7 +1075,7 @@ export default function UnifiedMap() {
             <div className={styles.settingGroup}><span className={styles.settingLabel}>{t('los.map.display')}</span><div className={styles.settingBtns}><button className={`${styles.settingBtn} ${basemap==='map'?styles.active:''}`} onClick={()=>setBasemap('map')}>{t('los.map.mapView')}</button><button className={`${styles.settingBtn} ${basemap==='satellite'?styles.active:''}`} onClick={()=>setBasemap('satellite')}>{t('los.map.satellite')}</button></div></div>
             <div className={styles.settingDivider}/>
             <div className={styles.settingGroup}><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.elevationMap')}</span><button className={`${styles.toggleBtn} ${elevationTintVisible?styles.active:''}`} onClick={()=>setElevationTintVisible(!elevationTintVisible)}>{elevationTintVisible?t('los.map.active'):t('los.map.inactive')}</button></div>
-              {elevationTintVisible && <><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.scale')}</span><div className={styles.settingBtns}><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='fixed'?styles.active:''}`} onClick={()=>setScaleMode('fixed')}>{t('los.map.fixed')}</button><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='viewport'?styles.active:''}`} onClick={()=>setScaleMode('viewport')}>{t('los.map.display')}</button></div></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.opacity')}</span><input type="range" min="0.1" max="1" step="0.05" value={elevationOpacity} onChange={e=>setElevationOpacity(parseFloat(e.target.value))} className={styles.opacitySlider}/></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.polygon')}</span>{elevPolygonDrawing ? <button className={`${styles.toggleBtn} ${styles.active}`} onClick={()=>setElevPolygonDrawing(false)}>{t('los.map.elevDrawing')}</button> : elevPolygonPoints.length > 0 ? <button className={styles.toggleBtn} onClick={()=>{setElevPolygonPoints([]);setPreviewPolygon(null);setScaleMode('fixed');}}>{t('los.map.clearElevPolygon')}</button> : <button className={styles.toggleBtn} onClick={()=>{setElevPolygonDrawing(true);setElevPolygonPoints([]);}}>{t('los.map.drawElevPolygon')}</button>}</div>{elevPolygonDrawing && <div className={styles.measureHint}>{t('los.map.elevPolygonHint')}</div>}{elevPolygonLoading && <div className={styles.measureHint}>{t('common.loading')}</div>}</>}
+              {elevationTintVisible && <><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.scale')}</span><div className={styles.settingBtns}><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='fixed'?styles.active:''}`} onClick={()=>setScaleMode('fixed')}>{t('los.map.fixed')}</button><button className={`${styles.settingBtn} ${styles.small} ${scaleMode==='viewport'?styles.active:''}`} onClick={()=>setScaleMode('viewport')}>{t('los.map.display')}</button></div></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.opacity')}</span><input type="range" min="0.1" max="1" step="0.05" value={elevationOpacity} onChange={e=>setElevationOpacity(parseFloat(e.target.value))} className={styles.opacitySlider}/></div><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.polygon')}</span>{elevPolygonDrawing ? <button className={`${styles.toggleBtn} ${styles.active}`} onClick={()=>setElevPolygonDrawing(false)}>{t('los.map.elevDrawing')}</button> : elevPolygonPoints.length > 0 ? <button className={styles.toggleBtn} onClick={()=>{setElevPolygonPoints([]);setPreviewPolygon(null);setClipPolygon(null);setScaleMode('fixed');}}>{t('los.map.clearElevPolygon')}</button> : <button className={styles.toggleBtn} onClick={()=>{setElevPolygonDrawing(true);setElevPolygonPoints([]);}}>{t('los.map.drawElevPolygon')}</button>}</div>{elevPolygonDrawing && <div className={styles.measureHint}>{t('los.map.elevPolygonHint')}</div>}{elevPolygonLoading && <div className={styles.measureHint}>{t('common.loading')}</div>}</>}
             </div>
             <div className={styles.settingDivider}/>
             <div className={styles.settingGroup}><div className={styles.settingRow}><span className={styles.settingLabel}>{t('los.map.boundaries')}</span><button className={`${styles.toggleBtn} ${showBoundaries?styles.active:''}`} onClick={()=>setShowBoundaries(!showBoundaries)}>{showBoundaries?t('los.map.active'):t('los.map.inactive')}</button></div></div>

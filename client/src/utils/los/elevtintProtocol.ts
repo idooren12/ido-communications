@@ -10,6 +10,8 @@ import maplibregl from 'maplibre-gl';
 let registered = false;
 let currentLUT: Uint8ClampedArray | null = null;
 let lutVersion = 0;
+let clipPolygon: Array<{lat: number; lon: number}> | null = null;
+let clipBounds: { minLat: number; maxLat: number; minLon: number; maxLon: number } | null = null;
 
 // Classic topographic elevation gradient
 export const GRADIENT_STOPS = [
@@ -32,6 +34,42 @@ export const GRADIENT_STOPS = [
   { elevation: 2100, color: '#c0b0a0' },  // Gray-brown (rocky)
   { elevation: 2500, color: '#f0ece8' },  // Near white (peaks)
 ];
+
+/**
+ * Set a polygon to clip the elevation tint to.
+ * Pass null to show elevation tint everywhere.
+ */
+export function setClipPolygon(polygon: Array<{lat: number; lon: number}> | null): void {
+  clipPolygon = polygon;
+  if (polygon && polygon.length >= 3) {
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+    for (const p of polygon) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lon < minLon) minLon = p.lon;
+      if (p.lon > maxLon) maxLon = p.lon;
+    }
+    clipBounds = { minLat, maxLat, minLon, maxLon };
+  } else {
+    clipBounds = null;
+  }
+  lutVersion++;
+}
+
+/**
+ * Ray casting point-in-polygon test (internal copy from geo.ts)
+ */
+function isInsidePolygon(lat: number, lon: number, poly: Array<{lat: number; lon: number}>): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const yi = poly[i].lat, xi = poly[i].lon;
+    const yj = poly[j].lat, xj = poly[j].lon;
+    if (((yi > lat) !== (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -194,7 +232,7 @@ export function registerElevtintProtocol(options: ElevtintOptions): void {
         .replace('{x}', String(x))
         .replace('{y}', String(y));
 
-      const blob = await processTerrainTile(tileUrl, currentLUT!, hillshade);
+      const blob = await processTerrainTile(tileUrl, currentLUT!, hillshade, z, x, y, clipPolygon, clipBounds);
       const buffer = await blob.arrayBuffer();
 
       if (debug) console.log('[elevtint] Processed tile:', { z, x, y, size: buffer.byteLength });
@@ -216,7 +254,12 @@ export function registerElevtintProtocol(options: ElevtintOptions): void {
 async function processTerrainTile(
   tileUrl: string,
   lut: Uint8ClampedArray,
-  applyHillshade: boolean = true
+  applyHillshade: boolean = true,
+  tileZ: number = 0,
+  tileX: number = 0,
+  tileY: number = 0,
+  clipPoly: Array<{lat: number; lon: number}> | null = null,
+  clipBnds: { minLat: number; maxLat: number; minLon: number; maxLon: number } | null = null
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -311,6 +354,39 @@ async function processTerrainTile(
               data[i] = Math.min(255, Math.round(data[i] * shade));
               data[i + 1] = Math.min(255, Math.round(data[i + 1] * shade));
               data[i + 2] = Math.min(255, Math.round(data[i + 2] * shade));
+            }
+          }
+        }
+
+        // Third pass: clip to polygon if set
+        if (clipPoly && clipPoly.length >= 3 && clipBnds) {
+          const n = Math.pow(2, tileZ);
+          const tileLonMin = (tileX / n) * 360 - 180;
+          const tileLonMax = ((tileX + 1) / n) * 360 - 180;
+          const tileLatMax = Math.atan(Math.sinh(Math.PI * (1 - 2 * tileY / n))) * 180 / Math.PI;
+          const tileLatMin = Math.atan(Math.sinh(Math.PI * (1 - 2 * (tileY + 1) / n))) * 180 / Math.PI;
+
+          // Quick check: if tile doesn't overlap polygon bounds at all, make everything transparent
+          if (tileLonMax < clipBnds.minLon || tileLonMin > clipBnds.maxLon ||
+              tileLatMax < clipBnds.minLat || tileLatMin > clipBnds.maxLat) {
+            // No overlap - entire tile is outside polygon
+            for (let i = 3; i < data.length; i += 4) {
+              data[i] = 0;
+            }
+          } else {
+            // Per-pixel clipping
+            const lonStep = (tileLonMax - tileLonMin) / size;
+            const latStep = (tileLatMax - tileLatMin) / size;
+
+            for (let py = 0; py < size; py++) {
+              const pixLat = tileLatMax - (py + 0.5) * latStep;
+              for (let px = 0; px < size; px++) {
+                const pixLon = tileLonMin + (px + 0.5) * lonStep;
+                const i = (py * size + px) * 4;
+                if (!isInsidePolygon(pixLat, pixLon, clipPoly)) {
+                  data[i + 3] = 0; // transparent
+                }
+              }
             }
           }
         }
