@@ -1,9 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RF_FREQUENCIES } from '../../../utils/los/los';
-import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress } from '../../../utils/los/MassiveCalculationEngine';
-import { haversineDistance, initialBearing, metersToDegreesLat, metersToDegreesLon, pointInPolygon, sphericalPolygonArea, type LatLon } from '../../../utils/los/geo';
+import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress, type Completion } from '../../../utils/los/MassiveCalculationEngine';
+import { sphericalPolygonArea, type LatLon } from '../../../utils/los/geo';
 import { useLOSState, type LOSAreaParams, type LOSAreaResultData, type GridCell } from '../../../contexts/LOSContext';
+import { StreamingRasterCanvas, type RasterCell, type GridBounds } from '../../../utils/los/losAreaRaster';
+import type { GridConfig } from '../../../utils/los/gridGenerator';
 import styles from './LOSAreaPanel.module.css';
 
 type CalculationMode = 'optical' | 'rf';
@@ -13,7 +15,7 @@ const MAX_POINTS_ABSOLUTE = 500000000;
 
 export default function LOSAreaPanel() {
   const { t } = useTranslation();
-  const { mapRef, addResult, setMapClickHandler, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells, setPreviewDragHandler, editingResultData, clearEditingResultData } = useLOSState();
+  const { mapRef, addResult, setMapClickHandler, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells, setPreviewRasterResult, setPreviewDragHandler, editingResultData, clearEditingResultData } = useLOSState();
   const cancelRef = useRef(false);
   const pickingOriginRef = useRef(false);
   const drawingPolygonRef = useRef(false);
@@ -43,9 +45,23 @@ export default function LOSAreaPanel() {
   const [calculating, setCalculating] = useState(false);
   const [calcTime, setCalcTime] = useState<number | null>(null);
 
+  // Streaming raster refs
+  const rasterCanvasRef = useRef<StreamingRasterCanvas | null>(null);
+  const statsRef = useRef({ total: 0, clear: 0, blocked: 0, noData: 0 });
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [streamStats, setStreamStats] = useState<{ total: number; clear: number; blocked: number; noData: number } | null>(null);
+
   useEffect(() => { pickingOriginRef.current = pickingOrigin; }, [pickingOrigin]);
   useEffect(() => { drawingPolygonRef.current = drawingPolygon; }, [drawingPolygon]);
-  useEffect(() => { setGridCells([]); setPreviewGridCells([]); setCalcTime(null); }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency, polygonPoints.length, areaMode, setPreviewGridCells]);
+  useEffect(() => {
+    setGridCells([]);
+    setPreviewGridCells([]);
+    setPreviewRasterResult(null);
+    setCalcTime(null);
+    setStreamStats(null);
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
+  }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency, polygonPoints.length, areaMode, setPreviewGridCells, setPreviewRasterResult]);
 
   // Register drag handler for preview markers (NaN = delete point)
   useEffect(() => {
@@ -163,8 +179,9 @@ export default function LOSAreaPanel() {
       setPreviewSector(null);
       setPreviewPolygon(null);
       setPreviewGridCells([]);
+      setPreviewRasterResult(null);
     };
-  }, [origin, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, toMeters, areaMode, polygonPoints, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells]);
+  }, [origin, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, toMeters, areaMode, polygonPoints, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells, setPreviewRasterResult]);
 
   // Register click handler for origin picking
   useEffect(() => {
@@ -220,11 +237,6 @@ export default function LOSAreaPanel() {
     if (areaMode === 'polygon' && polygonPoints.length < 3) return;
 
     // Check point count
-    if (estimatedPointCount > MAX_POINTS_ABSOLUTE) {
-      alert(t('los.losArea.tooManyPoints', { count: estimatedPointCount.toLocaleString(), max: MAX_POINTS_ABSOLUTE.toLocaleString() }));
-      return;
-    }
-
     if (estimatedPointCount > MAX_POINTS_WARNING) {
       const confirm = window.confirm(t('los.losArea.heavyCalculationConfirm', { count: estimatedPointCount.toLocaleString() }));
       if (!confirm) return;
@@ -234,82 +246,70 @@ export default function LOSAreaPanel() {
     setCalculating(true);
     setProgress(0);
     setGridCells([]);
+    setStreamStats(null);
+    setPreviewRasterResult(null);
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
+    statsRef.current = { total: 0, clear: 0, blocked: 0, noData: 0 };
     const startTime = performance.now();
 
     const res = parseFloat(resolution) || 100;
     const hOrigin = parseFloat(height) || 10;
     const hTarget = parseFloat(targetHeight) || 2;
+    const minD = toMeters(minDistance);
+    const maxD = toMeters(maxDistance);
+    const minAz = parseFloat(minAzimuth) || 0;
+    const maxAz = parseFloat(maxAzimuth) || 360;
 
-    const points: Array<{ lat: number; lon: number }> = [];
-    const latStep = metersToDegreesLat(res);
-    const lonStep = metersToDegreesLon(res, origin.lat);
-    let maxD: number;
-
-    if (areaMode === 'polygon' && polygonPoints.length >= 3) {
-      // Polygon mode: generate grid inside polygon
-      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-      for (const p of polygonPoints) {
-        if (p.lat < minLat) minLat = p.lat;
-        if (p.lat > maxLat) maxLat = p.lat;
-        if (p.lon < minLon) minLon = p.lon;
-        if (p.lon > maxLon) maxLon = p.lon;
-      }
-
-      for (let pLat = minLat; pLat <= maxLat && !cancelRef.current; pLat += latStep) {
-        for (let pLon = minLon; pLon <= maxLon && !cancelRef.current; pLon += lonStep) {
-          if (!pointInPolygon(pLat, pLon, polygonPoints)) continue;
-          points.push({ lat: pLat, lon: pLon });
-        }
-      }
-
-      // Max distance for zoom calculation = diagonal of bounding box
-      maxD = haversineDistance(minLat, minLon, maxLat, maxLon);
-    } else {
-      // Sector mode: generate grid filtered by sector
-      const minD = toMeters(minDistance);
-      maxD = toMeters(maxDistance);
-      const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
-
-      const latMin = origin.lat - metersToDegreesLat(maxD);
-      const latMax = origin.lat + metersToDegreesLat(maxD);
-      const lonMin = origin.lon - metersToDegreesLon(maxD, origin.lat);
-      const lonMax = origin.lon + metersToDegreesLon(maxD, origin.lat);
-
-      const normMinAz = ((minAz % 360) + 360) % 360;
-      const normMaxAz = ((maxAz % 360) + 360) % 360;
-      const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
-      const fullCircle = azRange === 0 || azRange >= 360;
-
-      for (let pLat = latMin; pLat <= latMax && !cancelRef.current; pLat += latStep) {
-        for (let pLon = lonMin; pLon <= lonMax && !cancelRef.current; pLon += lonStep) {
-          const dist = haversineDistance(origin.lat, origin.lon, pLat, pLon);
-          if (dist < minD || dist > maxD) continue;
-
-          if (!fullCircle) {
-            const bearing = initialBearing(origin.lat, origin.lon, pLat, pLon);
-            const normBearing = ((bearing % 360) + 360) % 360;
-            let inRange: boolean;
-            if (normMinAz <= normMaxAz) {
-              inRange = normBearing >= normMinAz && normBearing <= normMaxAz;
-            } else {
-              inRange = normBearing >= normMinAz || normBearing <= normMaxAz;
-            }
-            if (!inRange) continue;
-          }
-          points.push({ lat: pLat, lon: pLon });
-        }
-      }
-    }
-
-    // Pick zoom level based on max distance
-    const areaZoom = maxD > 100000 ? 10 : maxD > 50000 ? 11 : maxD > 10000 ? 12 : 13;
+    // Build GridConfig for lazy point generation
+    const gridConfig: GridConfig = {
+      mode: areaMode,
+      origin: { lat: origin.lat, lon: origin.lon, height: hOrigin },
+      targetHeight: hTarget,
+      minDistance: minD,
+      maxDistance: maxD,
+      minAzimuth: minAz,
+      maxAzimuth: maxAz,
+      resolution: res,
+      polygonPoints: areaMode === 'polygon' && polygonPoints.length >= 3 ? polygonPoints : undefined,
+      frequencyMHz: calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined,
+    };
 
     const config: TaskConfig = {
       origin: { lat: origin.lat, lon: origin.lon, height: hOrigin },
       targetHeight: hTarget,
-      points,
-      zoom: areaZoom,
-      frequencyMHz: calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined,
+      gridConfig,
+      frequencyMHz: gridConfig.frequencyMHz,
+    };
+
+    // Flush scheduling: setTimeout single-shot, re-armed when dirty
+    const FLUSH_INTERVAL_MS = 500;
+    const FLUSH_MIN_CELLS = 50000;
+    let dirtyCellsSinceFlush = 0;
+    let lastFlushTime = 0;
+
+    const scheduleFlush = () => {
+      if (flushTimerRef.current !== null) return; // already scheduled
+      flushTimerRef.current = setTimeout(async () => {
+        flushTimerRef.current = null;
+        if (!rasterCanvasRef.current || cancelRef.current) return;
+
+        const now = Date.now();
+        if (dirtyCellsSinceFlush < FLUSH_MIN_CELLS && (now - lastFlushTime) < FLUSH_INTERVAL_MS) {
+          // Not enough dirty data yet, reschedule
+          scheduleFlush();
+          return;
+        }
+
+        dirtyCellsSinceFlush = 0;
+        lastFlushTime = now;
+
+        const result = await rasterCanvasRef.current.flush();
+        if (result && !cancelRef.current) {
+          setPreviewRasterResult(result);
+          setStreamStats({ ...statsRef.current });
+        }
+      }, FLUSH_INTERVAL_MS);
     };
 
     try {
@@ -321,24 +321,67 @@ export default function LOSAreaPanel() {
           }
           setProgress(prog.percent);
         },
-        onPartialResult: (partialResults, prog) => {
+        onBoundsReady: (bounds: GridBounds, totalPoints: number) => {
           if (cancelRef.current) return;
-          setGridCells(partialResults as GridCell[]);
-          // Only update map preview at low frequency to avoid expensive raster re-renders
-          // For large calcs, only update every ~25% progress
-          const threshold = points.length > 1000000 ? 25 : points.length > 100000 ? 10 : 5;
-          if (prog.percent % threshold < 2) {
-            setPreviewGridCells(partialResults as GridCell[]);
+          rasterCanvasRef.current = new StreamingRasterCanvas(bounds, res);
+          lastFlushTime = Date.now();
+        },
+        onBatchResult: (batch: RasterCell[], prog: TaskProgress) => {
+          if (cancelRef.current) return;
+
+          // Paint to raster canvas
+          rasterCanvasRef.current?.paintBatch(batch);
+
+          // Track cell-level stats
+          for (const cell of batch) {
+            statsRef.current.total++;
+            if (!cell.hasData) statsRef.current.noData++;
+            else if (cell.clear === true) statsRef.current.clear++;
+            else if (cell.clear === false) statsRef.current.blocked++;
+            else statsRef.current.noData++;
+          }
+
+          dirtyCellsSinceFlush += batch.length;
+          scheduleFlush();
+        },
+        onComplete: async (completion: Completion) => {
+          if (cancelRef.current) return;
+
+          // Clear any pending flush timer
+          if (flushTimerRef.current !== null) {
+            clearTimeout(flushTimerRef.current);
+            flushTimerRef.current = null;
+          }
+
+          // Final flush
+          if (rasterCanvasRef.current) {
+            const result = await rasterCanvasRef.current.flush();
+            if (result) {
+              setPreviewRasterResult(result);
+            }
+          }
+
+          if (completion.mode === 'streaming') {
+            setStreamStats({
+              total: completion.summary.totalProcessed,
+              clear: completion.summary.clear,
+              blocked: completion.summary.blocked,
+              noData: completion.summary.noData,
+            });
           }
         },
-        onComplete: (allResults) => {
-          if (cancelRef.current) return;
-          setGridCells(allResults as GridCell[]);
-          setPreviewGridCells(allResults as GridCell[]);
+        onError: (error: string) => {
+          console.error('Calculation error:', error);
         },
       });
     } catch (e) {
       console.error('Calculation failed:', e);
+    }
+
+    // Clean up flush timer
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
     }
 
     setCalcTime(performance.now() - startTime);
@@ -348,14 +391,18 @@ export default function LOSAreaPanel() {
   const handleCancel = () => {
     cancelRef.current = true;
     getMassiveEngine().cancel();
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
   };
 
   const handleSaveResult = () => {
-    if (gridCells.length === 0 || !origin) return;
-
-    const clearCount = gridCells.filter(c => c.clear === true).length;
-    const blockedCount = gridCells.filter(c => c.clear === false).length;
-    const totalCount = clearCount + blockedCount;
+    const hasRaster = streamStats && streamStats.total > 0;
+    const hasLegacy = gridCells.length > 0;
+    if ((!hasRaster && !hasLegacy) || !origin) return;
 
     const minD = toMeters(minDistance);
     const maxD = toMeters(maxDistance);
@@ -376,13 +423,37 @@ export default function LOSAreaPanel() {
       polygon: areaMode === 'polygon' && polygonPoints.length >= 3 ? polygonPoints : undefined,
     };
 
-    const resultData: LOSAreaResultData = {
-      cells: gridCells,
-      clearCount,
-      blockedCount,
-      totalCount,
-      clearPercentage: totalCount > 0 ? (clearCount / totalCount) * 100 : 0,
-    };
+    let resultData: LOSAreaResultData;
+
+    if (hasRaster && rasterCanvasRef.current) {
+      // Streaming raster path — no cells[] stored
+      const rasterResult = rasterCanvasRef.current.getLastResult();
+      const clearCount = streamStats!.clear;
+      const blockedCount = streamStats!.blocked;
+      const totalCount = clearCount + blockedCount;
+      resultData = {
+        rasterUrl: rasterResult?.url,
+        rasterCoordinates: rasterResult?.coordinates,
+        effectiveResolutionXM: rasterResult?.effectiveResolutionXM,
+        effectiveResolutionYM: rasterResult?.effectiveResolutionYM,
+        clearCount,
+        blockedCount,
+        totalCount,
+        clearPercentage: totalCount > 0 ? (clearCount / totalCount) * 100 : 0,
+      };
+    } else {
+      // Legacy cells path
+      const clearCount = gridCells.filter(c => c.clear === true).length;
+      const blockedCount = gridCells.filter(c => c.clear === false).length;
+      const totalCount = clearCount + blockedCount;
+      resultData = {
+        cells: gridCells,
+        clearCount,
+        blockedCount,
+        totalCount,
+        clearPercentage: totalCount > 0 ? (clearCount / totalCount) * 100 : 0,
+      };
+    }
 
     addResult({
       type: 'los-area',
@@ -395,17 +466,27 @@ export default function LOSAreaPanel() {
 
     setGridCells([]);
     setPreviewGridCells([]);
+    setPreviewRasterResult(null);
+    setStreamStats(null);
+    // Don't destroy the raster canvas here — the saved result holds the Blob URL
+    rasterCanvasRef.current = null;
   };
 
   const handleClearResults = () => {
     setGridCells([]);
     setPreviewGridCells([]);
+    setPreviewRasterResult(null);
+    setStreamStats(null);
     setCalcTime(null);
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
   };
 
-  const clearCount = gridCells.filter(c => c.clear === true).length;
-  const blockedCount = gridCells.filter(c => c.clear === false).length;
+  // Computed stats: use streaming stats if available, otherwise compute from gridCells
+  const clearCount = streamStats ? streamStats.clear : gridCells.filter(c => c.clear === true).length;
+  const blockedCount = streamStats ? streamStats.blocked : gridCells.filter(c => c.clear === false).length;
   const totalCount = clearCount + blockedCount;
+  const hasResults = (streamStats && streamStats.total > 0) || gridCells.length > 0;
 
   return (
     <div className={styles.container}>
@@ -572,15 +653,15 @@ export default function LOSAreaPanel() {
         </div>
       )}
 
-      {gridCells.length > 0 && !calculating && (
+      {hasResults && !calculating && (
         <div className={styles.resultCard}>
           <div className={styles.resultStats}>
             <div className={styles.statItem}>
-              <span className={styles.statValue} style={{ color: '#10b981' }}>{clearCount}</span>
+              <span className={styles.statValue} style={{ color: '#10b981' }}>{clearCount.toLocaleString()}</span>
               <span className={styles.statLabel}>{t('los.losArea.clear')}</span>
             </div>
             <div className={styles.statItem}>
-              <span className={styles.statValue} style={{ color: '#f43f5e' }}>{blockedCount}</span>
+              <span className={styles.statValue} style={{ color: '#f43f5e' }}>{blockedCount.toLocaleString()}</span>
               <span className={styles.statLabel}>{t('los.losArea.blocked')}</span>
             </div>
             <div className={styles.statItem}>
@@ -604,7 +685,7 @@ export default function LOSAreaPanel() {
         >
           {calculating ? t('los.losArea.calculating') : t('los.losArea.calculate')}
         </button>
-        {gridCells.length > 0 && !calculating && (
+        {hasResults && !calculating && (
           <>
             <button className={styles.saveBtn} onClick={handleSaveResult}>{t('los.common.save')}</button>
             <button className={styles.clearBtn} onClick={handleClearResults}>{t('los.common.clear')}</button>

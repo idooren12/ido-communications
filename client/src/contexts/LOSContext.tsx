@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useCallback, useRef, useState, ReactNode } from 'react';
 import type { LOSResult, LOSProfilePoint } from '../utils/los/los';
 import type maplibregl from 'maplibre-gl';
+import type { RasterResult } from '../utils/los/losAreaRaster';
 
 // ==================== Types ====================
 
@@ -51,7 +52,11 @@ export interface GridCell {
 }
 
 export interface LOSAreaResultData {
-  cells: GridCell[];
+  cells?: GridCell[];              // legacy path
+  rasterUrl?: string;              // streaming: Blob URL for raster image
+  rasterCoordinates?: number[][];  // streaming: [[W,N],[E,N],[E,S],[W,S]] corners
+  effectiveResolutionXM?: number;  // streaming: meters/pixel in X
+  effectiveResolutionYM?: number;  // streaming: meters/pixel in Y
   clearCount: number;
   blockedCount: number;
   totalCount: number;
@@ -320,6 +325,8 @@ interface LOSContextValue {
   setPreviewPeaks: (peaks: PreviewPeak[]) => void;
   previewGridCells: PreviewGridCell[];
   setPreviewGridCells: (cells: PreviewGridCell[]) => void;
+  previewRasterResult: RasterResult | null;
+  setPreviewRasterResult: (result: RasterResult | null) => void;
 
   // Convenience actions
   setActivePanel: (panel: PanelType) => void;
@@ -393,6 +400,7 @@ export function LOSProvider({ children }: LOSProviderProps) {
   const [previewSector, setPreviewSector] = useState<PreviewSector | null>(null);
   const [previewPeaks, setPreviewPeaks] = useState<PreviewPeak[]>([]);
   const [previewGridCells, setPreviewGridCells] = useState<PreviewGridCell[]>([]);
+  const [previewRasterResult, setPreviewRasterResult] = useState<RasterResult | null>(null);
 
   // Drag handler ref for preview markers
   const previewDragHandler = useRef<((index: number, lat: number, lon: number) => void) | null>(null);
@@ -528,6 +536,8 @@ export function LOSProvider({ children }: LOSProviderProps) {
     setPreviewPeaks,
     previewGridCells,
     setPreviewGridCells,
+    previewRasterResult,
+    setPreviewRasterResult,
     setActivePanel,
     addResult,
     removeResult,

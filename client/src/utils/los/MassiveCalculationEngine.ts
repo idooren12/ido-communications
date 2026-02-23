@@ -1,15 +1,17 @@
 /**
- * MassiveCalculationEngine v5 - Optimized for 10M+ points
+ * MassiveCalculationEngine v6 - Streaming architecture for 100B+ points
  *
  * Key optimizations:
- * - Streaming results: don't accumulate all results in memory
+ * - Streaming results: onBatchResult callback, no allResults[] accumulation
+ * - Lazy point generation via GridConfig (O(chunkSize) memory)
  * - Use Transferable ArrayBuffers for tile data to avoid copies
- * - Larger chunks to reduce postMessage overhead
  * - All available CPU cores used
- * - Partial results sent less frequently for huge calculations
+ * - Backward compatible: legacy callers without onBatchResult work identically
  */
 
 import { TERRAIN_CONFIG } from './constants';
+import { type GridConfig, generatePointChunks, computeBounds, estimateTotalPoints, computeZoom } from './gridGenerator';
+import type { RasterCell, GridBounds } from './losAreaRaster';
 
 // ============================================================================
 // Types
@@ -39,12 +41,34 @@ export interface TaskConfig {
   points?: Array<{ lat: number; lon: number }>;
   chunkSize?: number;
   zoom?: number;
+  /** New: lazy grid configuration (replaces points[] for large calcs) */
+  gridConfig?: GridConfig;
 }
+
+/** Summary returned by onComplete in streaming mode */
+export interface StreamingSummary {
+  totalProcessed: number;
+  clear: number;
+  blocked: number;
+  noData: number;
+  durationMs: number;
+}
+
+/** Discriminated union for onComplete */
+export type Completion =
+  | { mode: 'legacy'; results: any[] }
+  | { mode: 'streaming'; summary: StreamingSummary };
 
 export interface EngineCallbacks {
   onProgress?: (progress: TaskProgress) => void;
+  /** Legacy: receives entire accumulated results array */
   onPartialResult?: (partialResult: any[], progress: TaskProgress) => void;
-  onComplete?: (result: any[]) => void;
+  /** Streaming: receives only new batch results (no accumulation) */
+  onBatchResult?: (batch: RasterCell[], progress: TaskProgress) => void;
+  /** Called when bounds and total points are known, before tile loading */
+  onBoundsReady?: (bounds: GridBounds, totalPoints: number) => void;
+  /** Called on completion. Type depends on streaming vs legacy mode. */
+  onComplete?: (result: Completion) => void;
   onError?: (error: string) => void;
 }
 
@@ -201,21 +225,28 @@ self.onmessage = async (e) => {
 class TileManager {
   private cache = new Map<string, ImageData>();
   private failedTiles = new Set<string>();
+  private abortController: AbortController | null = null;
 
   async loadTiles(
     keys: string[],
     url: string,
     onProgress?: (loaded: number, failed: number, total: number) => void
   ): Promise<Map<string, Uint8ClampedArray>> {
+    this.abortController = new AbortController();
+    const { signal } = this.abortController;
+
     const toLoad = keys.filter(k => !this.cache.has(k) && !this.failedTiles.has(k));
     let loaded = 0;
     let failed = 0;
 
     for (let i = 0; i < toLoad.length; i += TILE_BATCH_SIZE) {
+      if (signal.aborted) break;
       const batch = toLoad.slice(i, i + TILE_BATCH_SIZE);
 
       await Promise.all(batch.map(async key => {
-        const success = await this.loadTileWithRetry(key, url);
+        if (signal.aborted) return;
+        const success = await this.loadTileWithRetry(key, url, signal);
+        if (signal.aborted) return;
         if (success) {
           loaded++;
         } else {
@@ -225,10 +256,12 @@ class TileManager {
         onProgress?.(loaded, failed, toLoad.length);
       }));
 
-      if (i + TILE_BATCH_SIZE < toLoad.length) {
+      if (i + TILE_BATCH_SIZE < toLoad.length && !signal.aborted) {
         await new Promise(r => setTimeout(r, 10));
       }
     }
+
+    this.abortController = null;
 
     const result = new Map<string, Uint8ClampedArray>();
     for (const k of keys) {
@@ -238,17 +271,22 @@ class TileManager {
     return result;
   }
 
-  private async loadTileWithRetry(key: string, baseUrl: string): Promise<boolean> {
+  private async loadTileWithRetry(key: string, baseUrl: string, parentSignal?: AbortSignal): Promise<boolean> {
     const [z, x, y] = key.split('/').map(Number);
     const tileUrl = baseUrl.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
 
     for (let attempt = 0; attempt < TILE_RETRY_COUNT; attempt++) {
+      if (parentSignal?.aborted) return false;
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
+        // Abort individual fetch if parent is aborted
+        const onAbort = () => controller.abort();
+        parentSignal?.addEventListener('abort', onAbort, { once: true });
 
         const res = await fetch(tileUrl, { signal: controller.signal });
         clearTimeout(timeout);
+        parentSignal?.removeEventListener('abort', onAbort);
 
         if (!res.ok) {
           if (attempt < TILE_RETRY_COUNT - 1) {
@@ -273,12 +311,17 @@ class TileManager {
         return true;
 
       } catch (e) {
+        if (parentSignal?.aborted) return false;
         if (attempt < TILE_RETRY_COUNT - 1) {
           await new Promise(r => setTimeout(r, TILE_RETRY_DELAY * (attempt + 1)));
         }
       }
     }
     return false;
+  }
+
+  abort() {
+    this.abortController?.abort();
   }
 
   clear() {
@@ -365,6 +408,9 @@ class Engine {
     this.paused = false;
     const start = Date.now();
 
+    // Determine mode: streaming (onBatchResult present) vs legacy
+    const streaming = !!cb.onBatchResult;
+
     cb.onProgress?.({
       phase: 'generating',
       tilesLoaded: 0, tilesTotal: 0, tilesFailed: 0,
@@ -372,26 +418,66 @@ class Engine {
       percent: 0, estimatedTimeRemaining: null, startTime: start
     });
 
-    const points = this.genPoints(config);
-    if (points.length === 0) { cb.onComplete?.([]); return []; }
-    if (points.length > MAX_POINTS) {
-      const err = `\u05DE\u05E7\u05E1\u05D9\u05DE\u05D5\u05DD ${MAX_POINTS.toLocaleString()} \u05E0\u05E7\u05D5\u05D3\u05D5\u05EA`;
-      cb.onError?.(err);
-      throw new Error(err);
+    // ---- Point generation: lazy (gridConfig) or eager (legacy) ----
+    let totalPoints: number;
+    let pointIterator: Generator<Array<{ lat: number; lon: number }>> | null = null;
+    let eagerPoints: Array<{ lat: number; lon: number }> | null = null;
+    let zoom: number;
+    let bounds: GridBounds | null = null;
+
+    if (config.gridConfig) {
+      // Lazy mode: use gridGenerator
+      totalPoints = estimateTotalPoints(config.gridConfig);
+      bounds = computeBounds(config.gridConfig);
+      zoom = config.zoom || computeZoom(config.gridConfig);
+
+      if (totalPoints === 0) {
+        cb.onComplete?.({ mode: streaming ? 'streaming' : 'legacy', ...(streaming ? { summary: { totalProcessed: 0, clear: 0, blocked: 0, noData: 0, durationMs: 0 } } : { results: [] }) } as Completion);
+        return [];
+      }
+
+      // Notify consumer of bounds + total so it can create StreamingRasterCanvas
+      cb.onBoundsReady?.(bounds, totalPoints);
+
+      const chunkSize = config.chunkSize || (totalPoints > 1000000 ? 10000 : DEFAULT_CHUNK_SIZE);
+      pointIterator = generatePointChunks(config.gridConfig, chunkSize);
+    } else {
+      // Eager mode: generate all points upfront (legacy)
+      eagerPoints = this.genPoints(config);
+      totalPoints = eagerPoints.length;
+
+      if (totalPoints === 0) {
+        cb.onComplete?.({ mode: 'legacy', results: [] });
+        return [];
+      }
+      if (totalPoints > MAX_POINTS) {
+        const err = `מקסימום ${MAX_POINTS.toLocaleString()} נקודות`;
+        cb.onError?.(err);
+        throw new Error(err);
+      }
+
+      zoom = config.zoom || (totalPoints > 100000 ? 10 : totalPoints > 20000 ? 11 : 12);
     }
 
-    const zoom = config.zoom || (points.length > 100000 ? 10 : points.length > 20000 ? 11 : 12);
-    const tileKeys = this.getTileKeys(points, zoom, config.origin);
+    // ---- Compute tile keys ----
+    let tileKeys: string[];
+    if (bounds) {
+      // From bounds (lazy mode) — compute tile keys from bounding box
+      tileKeys = this.getTileKeysFromBounds(bounds, zoom, config.gridConfig?.origin || config.origin);
+    } else {
+      // From points (eager mode)
+      tileKeys = this.getTileKeys(eagerPoints!, zoom, config.origin);
+    }
 
-    console.log(`Calculating ${points.length.toLocaleString()} points, need ${tileKeys.length} tiles at zoom ${zoom}`);
+    console.log(`Calculating ~${totalPoints.toLocaleString()} points, need ${tileKeys.length} tiles at zoom ${zoom}`);
 
-    // Load tiles
+    // ---- Load tiles ----
     const tileData = await this.tiles.loadTiles(tileKeys, TERRAIN_CONFIG.url, (loaded, failed, total) => {
       if (this.cancelled) return;
       cb.onProgress?.({
         phase: 'preloading-tiles',
         tilesLoaded: loaded, tilesTotal: total, tilesFailed: failed,
-        pointsProcessed: 0, pointsTotal: points.length,
+        pointsProcessed: 0, pointsTotal: totalPoints,
         percent: Math.round((loaded + failed) / Math.max(1, total) * 10),
         estimatedTimeRemaining: null, startTime: start
       });
@@ -400,108 +486,203 @@ class Engine {
     console.log(`Loaded ${tileData.size} tiles, ${this.tiles.getFailedCount()} failed`);
     if (this.cancelled) return [];
 
-    // Use all available workers - always use MAX_WORKERS for large calculations
-    const numW = Math.min(MAX_WORKERS, Math.max(2, Math.ceil(points.length / 1000)));
+    // ---- Create worker pool ----
+    const numW = Math.min(MAX_WORKERS, Math.max(2, Math.ceil(totalPoints / 1000)));
     this.pool = new WorkerPool(numW);
     console.log(`Using ${numW} workers`);
 
     const tileCounts = await this.pool.sendTiles(tileData);
     console.log(`Workers received tiles:`, tileCounts);
 
-    if (this.cancelled) { this.pool.terminate(); return []; }
+    if (this.cancelled) { this.pool.terminate(); this.pool = null; return []; }
 
-    // Chunk size scales with number of points for efficiency
-    const chunkSize = config.chunkSize || (points.length > 1000000 ? 10000 : DEFAULT_CHUNK_SIZE);
-
-    // For very large calculations, don't accumulate all results in main thread
-    // Instead, keep a compact representation and only expand for partial results
-    const allResults: any[] = [];
-    let done = 0;
     const calcConfig = {
-      origin: config.origin,
-      targetHeight: config.targetHeight || 2,
+      origin: config.gridConfig?.origin || config.origin,
+      targetHeight: config.gridConfig?.targetHeight || config.targetHeight || 2,
       zoom,
-      freqMHz: config.frequencyMHz
+      freqMHz: config.gridConfig?.frequencyMHz || config.frequencyMHz
     };
 
-    // Determine partial result frequency based on total points
-    // For 10M+ points, sending partial results with the full array is expensive
-    const partialResultInterval = points.length > 5000000 ? numW * 100 :
-                                   points.length > 1000000 ? numW * 50 :
+    // ---- Calculation loop ----
+    // Streaming mode: no allResults[], call onBatchResult per batch
+    // Legacy mode: accumulate in allResults[], call onPartialResult periodically
+    const allResults: any[] = streaming ? [] : []; // legacy: accumulates; streaming: stays empty
+    let done = 0;
+    let streamClear = 0, streamBlocked = 0, streamNoData = 0;
+
+    const chunkSize = config.chunkSize || (totalPoints > 1000000 ? 10000 : DEFAULT_CHUNK_SIZE);
+
+    // Determine partial result frequency for legacy mode
+    const partialResultInterval = totalPoints > 5000000 ? numW * 100 :
+                                   totalPoints > 1000000 ? numW * 50 :
                                    numW * 20;
 
-    // Process chunks - feed workers in parallel pipeline
-    const chunks: any[][] = [];
-    for (let i = 0; i < points.length; i += chunkSize) {
-      chunks.push(points.slice(i, i + chunkSize));
-    }
+    // Build chunk source: either from generator or from eager points
+    let eagerOffset = 0; // tracks position in eagerPoints across iterations
+    const getNextChunks = (count: number): Array<Array<{ lat: number; lon: number }>> => {
+      const chunks: Array<Array<{ lat: number; lon: number }>> = [];
+      if (pointIterator) {
+        // Lazy: pull from generator
+        for (let i = 0; i < count; i++) {
+          if (this.cancelled) break;
+          const next = pointIterator.next();
+          if (next.done) break;
+          chunks.push(next.value);
+        }
+      } else if (eagerPoints) {
+        // Eager: slice from array
+        for (let i = 0; i < count && eagerOffset < eagerPoints.length; i++) {
+          chunks.push(eagerPoints.slice(eagerOffset, eagerOffset + chunkSize));
+          eagerOffset += chunkSize;
+        }
+      }
+      return chunks;
+    };
 
-    for (let i = 0; i < chunks.length; i += numW) {
+    let batchIndex = 0;
+    let exhausted = false;
+
+    while (!exhausted && !this.cancelled) {
       while (this.paused && !this.cancelled) await new Promise(r => setTimeout(r, 100));
       if (this.cancelled) break;
 
-      const batch = chunks.slice(i, i + numW);
+      // Pull numW chunks to feed all workers in parallel
+      const workerChunks = getNextChunks(numW);
+      if (workerChunks.length === 0) {
+        exhausted = true;
+        break;
+      }
 
       try {
         const batchResults = await Promise.all(
-          batch.map((c, j) => this.pool!.calc(j % numW, c, calcConfig))
+          workerChunks.map((c, j) => this.pool!.calc(j % numW, c, calcConfig))
         );
 
-        for (const r of batchResults) {
-          for (let k = 0; k < r.length; k++) allResults.push(r[k]);
+        // Ignore late results if cancelled during await
+        if (this.cancelled) break;
+
+        const batchPointCount = workerChunks.reduce((s, c) => s + c.length, 0);
+        done += batchPointCount;
+
+        if (streaming) {
+          // Streaming mode: convert to RasterCell[] and call onBatchResult
+          for (const workerResult of batchResults) {
+            const rasterBatch: RasterCell[] = [];
+            for (const r of workerResult) {
+              const cell: RasterCell = {
+                lat: r.lat,
+                lon: r.lon,
+                clear: r.clear ?? null,
+                fresnelClear: r.fresnelClear ?? null,
+                hasData: r.hasData !== false,
+              };
+              rasterBatch.push(cell);
+
+              // Track stats
+              if (!cell.hasData) streamNoData++;
+              else if (cell.clear === true) streamClear++;
+              else if (cell.clear === false) streamBlocked++;
+              else streamNoData++; // clear === null with hasData — shouldn't happen, but safe
+            }
+
+            if (rasterBatch.length > 0 && !this.cancelled) {
+              const prog: TaskProgress = {
+                phase: 'calculating',
+                tilesLoaded: tileData.size, tilesTotal: tileKeys.length,
+                tilesFailed: this.tiles.getFailedCount(),
+                pointsProcessed: done, pointsTotal: totalPoints,
+                percent: 10 + Math.round(done / totalPoints * 90),
+                estimatedTimeRemaining: this.estimateRemaining(start, done, totalPoints),
+                startTime: start,
+              };
+              cb.onBatchResult!(rasterBatch, prog);
+            }
+          }
+        } else {
+          // Legacy mode: accumulate
+          for (const r of batchResults) {
+            for (let k = 0; k < r.length; k++) allResults.push(r[k]);
+          }
         }
-        done += batch.reduce((s, c) => s + c.length, 0);
       } catch (e) {
+        if (this.cancelled) break;
         console.error('Batch calculation error:', e);
-        done += batch.reduce((s, c) => s + c.length, 0);
+        done += workerChunks.reduce((s, c) => s + c.length, 0);
       }
 
-      const elapsed = Date.now() - start;
-      const rate = done / elapsed;
-      const remaining = rate > 0 ? (points.length - done) / rate / 1000 : null;
-
+      // Progress update (both modes)
       const prog: TaskProgress = {
         phase: 'calculating',
         tilesLoaded: tileData.size, tilesTotal: tileKeys.length,
         tilesFailed: this.tiles.getFailedCount(),
-        pointsProcessed: done, pointsTotal: points.length,
-        percent: 10 + Math.round(done / points.length * 90),
-        estimatedTimeRemaining: remaining ? Math.round(remaining) : null,
+        pointsProcessed: done, pointsTotal: totalPoints,
+        percent: 10 + Math.round(done / totalPoints * 90),
+        estimatedTimeRemaining: this.estimateRemaining(start, done, totalPoints),
         startTime: start,
       };
       cb.onProgress?.(prog);
 
-      // Partial results - for huge calcs, don't copy the entire array
-      if (i % partialResultInterval === 0 || i + numW >= chunks.length) {
+      // Legacy partial results
+      if (!streaming && (batchIndex % partialResultInterval === 0 || exhausted)) {
         cb.onPartialResult?.(allResults, prog);
       }
+
+      batchIndex += numW;
     }
 
-    this.pool.terminate();
+    this.pool?.terminate();
     this.pool = null;
 
     if (!this.cancelled) {
-      const withData = allResults.filter(r => r.hasData !== false).length;
-      const noData = allResults.length - withData;
-      console.log(`Results: ${withData} with data, ${noData} without data, total time: ${((Date.now() - start) / 1000).toFixed(1)}s`);
+      const durationMs = Date.now() - start;
 
       cb.onProgress?.({
         phase: 'finalizing',
         tilesLoaded: tileData.size, tilesTotal: tileKeys.length,
         tilesFailed: this.tiles.getFailedCount(),
-        pointsProcessed: points.length, pointsTotal: points.length,
+        pointsProcessed: done, pointsTotal: totalPoints,
         percent: 100, estimatedTimeRemaining: 0, startTime: start
       });
-      cb.onComplete?.(allResults);
+
+      if (streaming) {
+        const summary: StreamingSummary = {
+          totalProcessed: done,
+          clear: streamClear,
+          blocked: streamBlocked,
+          noData: streamNoData,
+          durationMs,
+        };
+        console.log(`Streaming done: ${done.toLocaleString()} points, ${streamClear} clear, ${streamBlocked} blocked, ${streamNoData} noData, ${(durationMs / 1000).toFixed(1)}s`);
+        cb.onComplete?.({ mode: 'streaming', summary });
+      } else {
+        const withData = allResults.filter(r => r.hasData !== false).length;
+        const noData = allResults.length - withData;
+        console.log(`Results: ${withData} with data, ${noData} without data, total time: ${(durationMs / 1000).toFixed(1)}s`);
+        cb.onComplete?.({ mode: 'legacy', results: allResults });
+      }
     }
 
-    return allResults;
+    return streaming ? [] : allResults;
   }
 
   pause() { this.paused = true; }
   resume() { this.paused = false; }
-  cancel() { this.cancelled = true; this.pool?.terminate(); this.pool = null; }
+
+  cancel() {
+    this.cancelled = true;
+    this.tiles.abort();
+    this.pool?.terminate();
+    this.pool = null;
+  }
+
   clearCache() { this.tiles.clear(); }
+
+  private estimateRemaining(start: number, done: number, total: number): number | null {
+    const elapsed = Date.now() - start;
+    const rate = done / elapsed;
+    if (rate <= 0) return null;
+    return Math.round((total - done) / rate / 1000);
+  }
 
   private genPoints(c: TaskConfig): Array<{ lat: number; lon: number }> {
     if (c.points?.length) return c.points;
@@ -529,6 +710,38 @@ class Engine {
     const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
     const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
     return { lat: p2 * 180 / Math.PI, lon: ((l2 * 180 / Math.PI) + 540) % 360 - 180 };
+  }
+
+  private getTileKeysFromBounds(bounds: GridBounds, z: number, origin?: { lat: number; lon: number; height: number }): string[] {
+    const n = Math.pow(2, z);
+
+    let minLat = bounds.south, maxLat = bounds.north;
+    let minLon = bounds.west, maxLon = bounds.east;
+    if (origin) {
+      if (origin.lat < minLat) minLat = origin.lat;
+      if (origin.lat > maxLat) maxLat = origin.lat;
+      if (origin.lon < minLon) minLon = origin.lon;
+      if (origin.lon > maxLon) maxLon = origin.lon;
+    }
+
+    const toTile = (lat: number, lon: number) => {
+      lat = Math.max(-85.05, Math.min(85.05, lat));
+      const latRad = lat * Math.PI / 180;
+      const tx = Math.floor(((lon + 180) / 360) * n);
+      const ty = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+      return { tx: Math.max(0, Math.min(n - 1, tx)), ty: Math.max(0, Math.min(n - 1, ty)) };
+    };
+
+    const tl = toTile(maxLat, minLon);
+    const br = toTile(minLat, maxLon);
+
+    const keys: string[] = [];
+    for (let tx = tl.tx; tx <= br.tx; tx++) {
+      for (let ty = tl.ty; ty <= br.ty; ty++) {
+        keys.push(`${z}/${tx}/${ty}`);
+      }
+    }
+    return keys;
   }
 
   private getTileKeys(pts: Array<{ lat: number; lon: number }>, z: number, origin?: { lat: number; lon: number }): string[] {
@@ -583,4 +796,4 @@ export async function smartCalculate(config: TaskConfig, cb: EngineCallbacks = {
   return getMassiveEngine().calculate(config, cb);
 }
 
-export type { TaskProgress, TaskConfig, EngineCallbacks };
+export type { TaskProgress, TaskConfig, EngineCallbacks, StreamingSummary, Completion };

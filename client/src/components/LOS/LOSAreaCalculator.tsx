@@ -2,9 +2,11 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next';
 import maplibregl from 'maplibre-gl';
 import { RF_FREQUENCIES } from '../../utils/los/los';
-import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress } from '../../utils/los/MassiveCalculationEngine';
+import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress, type Completion } from '../../utils/los/MassiveCalculationEngine';
 import { destinationPoint, metersToDegreesLat, metersToDegreesLon } from '../../utils/los/geo';
 import { ISRAEL_CENTER, TERRAIN_CONFIG, BASEMAP_SOURCES } from '../../utils/los/constants';
+import { StreamingRasterCanvas, type RasterCell, type RasterResult, type GridBounds } from '../../utils/los/losAreaRaster';
+import type { GridConfig } from '../../utils/los/gridGenerator';
 import styles from './LOSAreaCalculator.module.css';
 
 interface GridCell { lat: number; lon: number; clear: boolean | null; fresnelClear?: boolean | null; }
@@ -43,9 +45,22 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
   const [calculating, setCalculating] = useState(false);
   const [calcTime, setCalcTime] = useState<number | null>(null);
 
+  // Streaming raster refs
+  const rasterCanvasRef = useRef<StreamingRasterCanvas | null>(null);
+  const rasterResultRef = useRef<RasterResult | null>(null);
+  const statsRef = useRef({ total: 0, clear: 0, blocked: 0, noData: 0 });
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [streamStats, setStreamStats] = useState<{ total: number; clear: number; blocked: number; noData: number } | null>(null);
+
   useEffect(() => { pickingOriginRef.current = pickingOrigin; }, [pickingOrigin]);
   useEffect(() => { onStateChange?.({ lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution }); }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, onStateChange]);
-  useEffect(() => { setGridCells([]); setCalcTime(null); }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency]);
+  useEffect(() => {
+    setGridCells([]);
+    setCalcTime(null);
+    setStreamStats(null);
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
+  }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency]);
 
   const toMeters = useCallback((val: string) => { const n = parseFloat(val) || 0; return distanceUnit === 'km' ? n * 1000 : n; }, [distanceUnit]);
 
@@ -127,6 +142,20 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
           ],
           'fill-opacity': 0.7
         }
+      });
+
+      // Raster overlay for streaming mode (transparent 1x1 pixel as placeholder)
+      map.addSource('raster-overlay', {
+        type: 'image',
+        url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAABJRUnErkJggg==',
+        coordinates: [[34.0, 32.0], [35.0, 32.0], [35.0, 31.0], [34.0, 31.0]],
+      });
+      map.addLayer({
+        id: 'raster-overlay-layer',
+        type: 'raster',
+        source: 'raster-overlay',
+        paint: { 'raster-opacity': 0.85 },
+        layout: { visibility: 'none' },
       });
 
       // DSM bounds layer
@@ -223,6 +252,24 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
     (map.getSource('coverage') as maplibregl.GeoJSONSource)?.setData({ type: 'FeatureCollection', features });
   }, [gridCells, mapLoaded, resolution, calcMode]);
 
+  // Update raster overlay on map
+  const updateRasterOverlay = useCallback((result: RasterResult | null) => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded) return;
+    const src = map.getSource('raster-overlay') as maplibregl.ImageSource | undefined;
+    if (!src) return;
+
+    if (result) {
+      src.updateImage({ url: result.url, coordinates: result.coordinates as any });
+      map.setLayoutProperty('raster-overlay-layer', 'visibility', 'visible');
+      // Hide GeoJSON layer when raster is active
+      map.setLayoutProperty('coverage-layer', 'visibility', 'none');
+    } else {
+      map.setLayoutProperty('raster-overlay-layer', 'visibility', 'none');
+      map.setLayoutProperty('coverage-layer', 'visibility', 'visible');
+    }
+  }, [mapLoaded]);
+
   // Calculate coverage using MassiveCalculationEngine
   const handleCalculate = async () => {
     if (!origin) return;
@@ -230,46 +277,67 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
     setCalculating(true);
     setProgress(0);
     setGridCells([]);
+    setStreamStats(null);
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
+    rasterResultRef.current = null;
+    statsRef.current = { total: 0, clear: 0, blocked: 0, noData: 0 };
+    updateRasterOverlay(null);
     const startTime = performance.now();
 
     const minD = toMeters(minDistance), maxD = toMeters(maxDistance), res = parseFloat(resolution) || 100;
     const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
+    const hOrigin = parseFloat(height) || 10;
+    const hTarget = parseFloat(targetHeight) || 2;
 
-    // Generate all target points with wrap-around azimuth support
-    const points: { lat: number; lon: number }[] = [];
-    for (let d = Math.max(res, minD); d <= maxD; d += res) {
-      const circumference = 2 * Math.PI * d;
-      const angularRes = Math.max(0.5, (res / circumference) * 360);
-
-      const normMinAz = ((minAz % 360) + 360) % 360;
-      const normMaxAz = ((maxAz % 360) + 360) % 360;
-
-      if (normMinAz === normMaxAz || (normMinAz === 0 && normMaxAz === 360)) {
-        for (let az = 0; az < 360; az += angularRes) {
-          points.push(destinationPoint(origin.lat, origin.lon, az, d));
-        }
-      } else if (normMinAz < normMaxAz) {
-        for (let az = normMinAz; az <= normMaxAz; az += angularRes) {
-          points.push(destinationPoint(origin.lat, origin.lon, az, d));
-        }
-      } else {
-        for (let az = normMinAz; az < 360; az += angularRes) {
-          points.push(destinationPoint(origin.lat, origin.lon, az, d));
-        }
-        for (let az = 0; az <= normMaxAz; az += angularRes) {
-          points.push(destinationPoint(origin.lat, origin.lon, az, d));
-        }
-      }
-    }
-
-    const areaZoom = maxD > 100000 ? 10 : maxD > 50000 ? 11 : maxD > 10000 ? 12 : 13;
+    // Build GridConfig for lazy point generation
+    const gridConfig: GridConfig = {
+      mode: 'sector',
+      origin: { lat: origin.lat, lon: origin.lon, height: hOrigin },
+      targetHeight: hTarget,
+      minDistance: minD,
+      maxDistance: maxD,
+      minAzimuth: minAz,
+      maxAzimuth: maxAz,
+      resolution: res,
+      frequencyMHz: calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined,
+    };
 
     const config: TaskConfig = {
-      origin: { lat: origin.lat, lon: origin.lon, height: parseFloat(height) || 10 },
-      targetHeight: parseFloat(targetHeight) || 2,
-      points,
-      zoom: areaZoom,
-      frequencyMHz: calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined,
+      origin: { lat: origin.lat, lon: origin.lon, height: hOrigin },
+      targetHeight: hTarget,
+      gridConfig,
+      frequencyMHz: gridConfig.frequencyMHz,
+    };
+
+    // Flush scheduling
+    const FLUSH_INTERVAL_MS = 500;
+    const FLUSH_MIN_CELLS = 50000;
+    let dirtyCellsSinceFlush = 0;
+    let lastFlushTime = 0;
+
+    const scheduleFlush = () => {
+      if (flushTimerRef.current !== null) return;
+      flushTimerRef.current = setTimeout(async () => {
+        flushTimerRef.current = null;
+        if (!rasterCanvasRef.current || cancelRef.current) return;
+
+        const now = Date.now();
+        if (dirtyCellsSinceFlush < FLUSH_MIN_CELLS && (now - lastFlushTime) < FLUSH_INTERVAL_MS) {
+          scheduleFlush();
+          return;
+        }
+
+        dirtyCellsSinceFlush = 0;
+        lastFlushTime = now;
+
+        const result = await rasterCanvasRef.current.flush();
+        if (result && !cancelRef.current) {
+          rasterResultRef.current = result;
+          updateRasterOverlay(result);
+          setStreamStats({ ...statsRef.current });
+        }
+      }, FLUSH_INTERVAL_MS);
     };
 
     try {
@@ -281,26 +349,100 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
           }
           setProgress(prog.percent);
         },
-        onPartialResult: (partialResults) => {
+        onBoundsReady: (bounds: GridBounds, totalPoints: number) => {
           if (cancelRef.current) return;
-          setGridCells(partialResults as GridCell[]);
+          rasterCanvasRef.current = new StreamingRasterCanvas(bounds, res);
+          lastFlushTime = Date.now();
         },
-        onComplete: (allResults) => {
+        onBatchResult: (batch: RasterCell[], prog: TaskProgress) => {
           if (cancelRef.current) return;
-          setGridCells(allResults as GridCell[]);
+
+          rasterCanvasRef.current?.paintBatch(batch);
+
+          for (const cell of batch) {
+            statsRef.current.total++;
+            if (!cell.hasData) statsRef.current.noData++;
+            else if (cell.clear === true) statsRef.current.clear++;
+            else if (cell.clear === false) statsRef.current.blocked++;
+            else statsRef.current.noData++;
+          }
+
+          dirtyCellsSinceFlush += batch.length;
+          scheduleFlush();
+        },
+        onComplete: async (completion: Completion) => {
+          if (cancelRef.current) return;
+
+          if (flushTimerRef.current !== null) {
+            clearTimeout(flushTimerRef.current);
+            flushTimerRef.current = null;
+          }
+
+          // Final flush
+          if (rasterCanvasRef.current) {
+            const result = await rasterCanvasRef.current.flush();
+            if (result) {
+              rasterResultRef.current = result;
+              updateRasterOverlay(result);
+            }
+          }
+
+          if (completion.mode === 'streaming') {
+            setStreamStats({
+              total: completion.summary.totalProcessed,
+              clear: completion.summary.clear,
+              blocked: completion.summary.blocked,
+              noData: completion.summary.noData,
+            });
+          }
+        },
+        onError: (error: string) => {
+          console.error('Calculation error:', error);
         },
       });
     } catch (e) {
       console.error('Calculation failed:', e);
     }
 
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+
     setCalcTime(performance.now() - startTime);
     setCalculating(false);
   };
 
-  const handleCancel = () => { cancelRef.current = true; getMassiveEngine().cancel(); setCalculating(false); };
+  const handleCancel = () => {
+    cancelRef.current = true;
+    getMassiveEngine().cancel();
+    if (flushTimerRef.current !== null) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    rasterCanvasRef.current?.destroy();
+    rasterCanvasRef.current = null;
+    setCalculating(false);
+  };
 
   const stats = useMemo(() => {
+    if (streamStats && streamStats.total > 0) {
+      // Streaming mode — use cell-level stats
+      const withData = streamStats.clear + streamStats.blocked;
+      return {
+        totalCells: streamStats.total,
+        withData,
+        noData: streamStats.noData,
+        clear: streamStats.clear,
+        blocked: streamStats.blocked,
+        percent: withData > 0 ? Math.round(streamStats.clear / withData * 100) : 0,
+        fresnelClear: 0,
+        fresnelBlocked: 0,
+        fresnelPercent: 0,
+      };
+    }
+
+    // Legacy mode — compute from gridCells
     const withData = gridCells.filter(c => c.clear !== null);
     const noData = gridCells.length - withData.length;
     const clear = withData.filter(c => c.clear === true).length;
@@ -319,7 +461,7 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
       fresnelBlocked,
       fresnelPercent: withData.length > 0 ? Math.round(fresnelClear / withData.length * 100) : 0,
     };
-  }, [gridCells]);
+  }, [gridCells, streamStats]);
 
   return (
     <div className={styles.container}>
@@ -384,7 +526,7 @@ export default function LOSAreaCalculator({ initialState, onStateChange }: Props
             {calculating ? (
               <><div className={styles.progressBar}><div className={styles.progressFill} style={{ width: `${progress}%` }} /></div><span className={styles.progressText}>{progress}%</span><button className={styles.cancelBtn} onClick={handleCancel}>{t('los.losArea.cancel')}</button></>
             ) : (
-              <><button className={styles.calculateBtn} onClick={handleCalculate} disabled={!origin}>{t('los.losArea.calculate')}</button>{gridCells.length > 0 && <button className={styles.clearBtn} onClick={() => { setGridCells([]); setCalcTime(null); }}>{t('los.losArea.clearResult')}</button>}</>
+              <><button className={styles.calculateBtn} onClick={handleCalculate} disabled={!origin}>{t('los.losArea.calculate')}</button>{stats.totalCells > 0 && <button className={styles.clearBtn} onClick={() => { setGridCells([]); setStreamStats(null); setCalcTime(null); rasterCanvasRef.current?.destroy(); rasterCanvasRef.current = null; updateRasterOverlay(null); }}>{t('los.losArea.clearResult')}</button>}</>
             )}
           </div>
         </div>

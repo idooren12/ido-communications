@@ -18,7 +18,7 @@ type ScaleMode = 'fixed' | 'viewport';
 
 export default function UnifiedMap() {
   const { t } = useTranslation();
-  const { state, mapRef, updateMapState, getVisibleResults, mapClickHandler, setMapClickHandler, previewPoints, setPreviewPoints, previewPolygon, setPreviewPolygon, previewLine, previewSector, previewPeaks, previewGridCells, removeResult, previewDragHandler, editResultInPanel } = useLOSState();
+  const { state, mapRef, updateMapState, getVisibleResults, mapClickHandler, setMapClickHandler, previewPoints, setPreviewPoints, previewPolygon, setPreviewPolygon, previewLine, previewSector, previewPeaks, previewGridCells, previewRasterResult, removeResult, previewDragHandler, editResultInPanel } = useLOSState();
   const mapContainer = useRef<HTMLDivElement>(null);
   const searchMarkerRef = useRef<{ marker: maplibregl.Marker; popup: maplibregl.Popup } | null>(null);
   const resultMarkersRef = useRef<Map<string, maplibregl.Marker[]>>(new Map());
@@ -677,18 +677,32 @@ export default function UnifiedMap() {
       const layerId = `result-raster-layer-${r.id}`;
       newRasterIds.add(r.id);
 
-      // Render cells to raster image
-      const raster = gridToImageUrl(r.result.cells, resolution, origin.lat);
+      // Render raster image: use pre-rendered rasterUrl if available, else legacy gridToImageUrl
+      let rasterUrl: string | undefined;
+      let rasterCoords: number[][] | undefined;
 
-      if (raster) {
+      if (r.result.rasterUrl && r.result.rasterCoordinates) {
+        // Streaming path: raster already rendered
+        rasterUrl = r.result.rasterUrl;
+        rasterCoords = r.result.rasterCoordinates;
+      } else if (r.result.cells && r.result.cells.length > 0) {
+        // Legacy path: render from cells
+        const raster = gridToImageUrl(r.result.cells, resolution, origin.lat);
+        if (raster) {
+          rasterUrl = raster.url;
+          rasterCoords = raster.coordinates;
+        }
+      }
+
+      if (rasterUrl && rasterCoords) {
         const existingSource = mapRef.current!.getSource(sourceId) as maplibregl.ImageSource;
         if (existingSource) {
-          existingSource.updateImage({ url: raster.url, coordinates: raster.coordinates });
+          existingSource.updateImage({ url: rasterUrl, coordinates: rasterCoords as any });
         } else {
           mapRef.current!.addSource(sourceId, {
             type: 'image',
-            url: raster.url,
-            coordinates: raster.coordinates,
+            url: rasterUrl,
+            coordinates: rasterCoords as any,
           });
           // Insert before boundary layer so boundary lines draw on top
           const beforeLayer = mapRef.current!.getLayer('results-los-area-boundary-line') ? 'results-los-area-boundary-line' : undefined;
@@ -989,14 +1003,34 @@ export default function UnifiedMap() {
   }, [state.results, mapLoaded, mapRef, getVisibleResults]);
 
   // Update preview grid cells (for LOS Area calculation preview) - raster image
+  // Handles both streaming (previewRasterResult) and legacy (previewGridCells) paths
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
 
     const sourceId = 'preview-grid-raster';
     const layerId = 'preview-grid-raster-layer';
 
-    if (previewGridCells.length === 0) {
-      // Remove raster if no cells
+    // Determine raster source: streaming takes priority over legacy
+    let rasterUrl: string | undefined;
+    let rasterCoords: number[][] | undefined;
+
+    if (previewRasterResult) {
+      // Streaming path: use pre-rendered raster directly
+      rasterUrl = previewRasterResult.url;
+      rasterCoords = previewRasterResult.coordinates;
+    } else if (previewGridCells.length > 0) {
+      // Legacy path: render from cells
+      const res = previewSector?.resolution || 100;
+      const refLat = previewSector?.origin.lat || 31.5;
+      const raster = gridToImageUrl(previewGridCells, res, refLat);
+      if (raster) {
+        rasterUrl = raster.url;
+        rasterCoords = raster.coordinates;
+      }
+    }
+
+    if (!rasterUrl || !rasterCoords) {
+      // Remove raster if no data
       if (previewRasterActiveRef.current) {
         if (mapRef.current.getLayer(layerId)) mapRef.current.removeLayer(layerId);
         if (mapRef.current.getSource(sourceId)) mapRef.current.removeSource(sourceId);
@@ -1005,20 +1039,14 @@ export default function UnifiedMap() {
       return;
     }
 
-    const res = previewSector?.resolution || 100;
-    const refLat = previewSector?.origin.lat || 31.5;
-
-    const raster = gridToImageUrl(previewGridCells, res, refLat);
-    if (!raster) return;
-
     const existingSource = mapRef.current.getSource(sourceId) as maplibregl.ImageSource;
     if (existingSource) {
-      existingSource.updateImage({ url: raster.url, coordinates: raster.coordinates });
+      existingSource.updateImage({ url: rasterUrl, coordinates: rasterCoords as any });
     } else {
       mapRef.current.addSource(sourceId, {
         type: 'image',
-        url: raster.url,
-        coordinates: raster.coordinates,
+        url: rasterUrl,
+        coordinates: rasterCoords as any,
       });
       mapRef.current.addLayer({
         id: layerId,
@@ -1028,7 +1056,7 @@ export default function UnifiedMap() {
       });
       previewRasterActiveRef.current = true;
     }
-  }, [previewGridCells, previewSector, mapLoaded, mapRef]);
+  }, [previewGridCells, previewRasterResult, previewSector, mapLoaded, mapRef]);
 
   // Event handler for popup action buttons (edit, delete)
   useEffect(() => {
