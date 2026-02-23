@@ -285,17 +285,21 @@ export default function LOSAreaPanel() {
     // Flush scheduling: setTimeout single-shot, re-armed when dirty
     const FLUSH_INTERVAL_MS = 500;
     const FLUSH_MIN_CELLS = 50000;
+    const FIRST_FLUSH_DELAY_MS = 100; // First flush fires quickly for immediate visual feedback
     let dirtyCellsSinceFlush = 0;
     let lastFlushTime = 0;
+    let flushCount = 0;
 
     const scheduleFlush = () => {
       if (flushTimerRef.current !== null) return; // already scheduled
+      // First flush fires quickly for immediate visual feedback
+      const delay = flushCount === 0 ? FIRST_FLUSH_DELAY_MS : FLUSH_INTERVAL_MS;
       flushTimerRef.current = setTimeout(async () => {
         flushTimerRef.current = null;
         if (!rasterCanvasRef.current || cancelRef.current) return;
 
         const now = Date.now();
-        if (dirtyCellsSinceFlush < FLUSH_MIN_CELLS && (now - lastFlushTime) < FLUSH_INTERVAL_MS) {
+        if (flushCount > 0 && dirtyCellsSinceFlush < FLUSH_MIN_CELLS && (now - lastFlushTime) < FLUSH_INTERVAL_MS) {
           // Not enough dirty data yet, reschedule
           scheduleFlush();
           return;
@@ -303,13 +307,14 @@ export default function LOSAreaPanel() {
 
         dirtyCellsSinceFlush = 0;
         lastFlushTime = now;
+        flushCount++;
 
         const result = await rasterCanvasRef.current.flush();
         if (result && !cancelRef.current) {
           setPreviewRasterResult(result);
           setStreamStats({ ...statsRef.current });
         }
-      }, FLUSH_INTERVAL_MS);
+      }, delay);
     };
 
     try {

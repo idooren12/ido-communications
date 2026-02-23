@@ -67,8 +67,8 @@ export interface EngineCallbacks {
   onBatchResult?: (batch: RasterCell[], progress: TaskProgress) => void;
   /** Called when bounds and total points are known, before tile loading */
   onBoundsReady?: (bounds: GridBounds, totalPoints: number) => void;
-  /** Called on completion. Type depends on streaming vs legacy mode. */
-  onComplete?: (result: Completion) => void;
+  /** Called on completion. Type depends on streaming vs legacy mode. May be async — engine will await it. */
+  onComplete?: (result: Completion) => void | Promise<void>;
   onError?: (error: string) => void;
 }
 
@@ -371,15 +371,27 @@ class WorkerPool {
     return new Promise((res, rej) => {
       const w = this.workers[idx];
       const id = Date.now() + '-' + idx + '-' + Math.random();
-      const t = setTimeout(() => rej(new Error('Calculation timeout')), 300000); // 5 min timeout per chunk
+      const t = setTimeout(() => {
+        w.removeEventListener('message', h);
+        w.removeEventListener('error', errH);
+        rej(new Error(`Worker ${idx} calculation timeout (5 min)`));
+      }, 300000);
       const h = (e: MessageEvent) => {
         if (e.data.id === id && e.data.type === 'done') {
           clearTimeout(t);
           w.removeEventListener('message', h);
+          w.removeEventListener('error', errH);
           res(e.data.payload);
         }
       };
+      const errH = (e: ErrorEvent) => {
+        clearTimeout(t);
+        w.removeEventListener('message', h);
+        w.removeEventListener('error', errH);
+        rej(new Error(`Worker ${idx} error: ${e.message}`));
+      };
       w.addEventListener('message', h);
+      w.addEventListener('error', errH);
       w.postMessage({ id, type: 'calc', payload: { points, ...config } });
     });
   }
@@ -541,6 +553,7 @@ class Engine {
 
     let batchIndex = 0;
     let exhausted = false;
+    console.log(`Starting calculation loop: streaming=${streaming}, totalPoints=${totalPoints.toLocaleString()}, chunkSize=${chunkSize}, numWorkers=${numW}, mode=${pointIterator ? 'lazy' : 'eager'}`);
 
     while (!exhausted && !this.cancelled) {
       while (this.paused && !this.cancelled) await new Promise(r => setTimeout(r, 100));
@@ -586,12 +599,13 @@ class Engine {
             }
 
             if (rasterBatch.length > 0 && !this.cancelled) {
+              const pct = Math.min(99, 10 + Math.round(done / Math.max(1, totalPoints) * 90));
               const prog: TaskProgress = {
                 phase: 'calculating',
                 tilesLoaded: tileData.size, tilesTotal: tileKeys.length,
                 tilesFailed: this.tiles.getFailedCount(),
                 pointsProcessed: done, pointsTotal: totalPoints,
-                percent: 10 + Math.round(done / totalPoints * 90),
+                percent: pct,
                 estimatedTimeRemaining: this.estimateRemaining(start, done, totalPoints),
                 startTime: start,
               };
@@ -606,17 +620,18 @@ class Engine {
         }
       } catch (e) {
         if (this.cancelled) break;
-        console.error('Batch calculation error:', e);
+        console.error(`Batch calculation error (batch ${batchIndex}, done=${done.toLocaleString()}/${totalPoints.toLocaleString()}):`, e);
         done += workerChunks.reduce((s, c) => s + c.length, 0);
       }
 
       // Progress update (both modes)
+      const pctOuter = Math.min(99, 10 + Math.round(done / Math.max(1, totalPoints) * 90));
       const prog: TaskProgress = {
         phase: 'calculating',
         tilesLoaded: tileData.size, tilesTotal: tileKeys.length,
         tilesFailed: this.tiles.getFailedCount(),
         pointsProcessed: done, pointsTotal: totalPoints,
-        percent: 10 + Math.round(done / totalPoints * 90),
+        percent: pctOuter,
         estimatedTimeRemaining: this.estimateRemaining(start, done, totalPoints),
         startTime: start,
       };
@@ -630,35 +645,41 @@ class Engine {
       batchIndex += numW;
     }
 
+    console.log(`Calculation loop ended: exhausted=${exhausted}, cancelled=${this.cancelled}, done=${done.toLocaleString()}/${totalPoints.toLocaleString()}, batches=${batchIndex}`);
+
     this.pool?.terminate();
     this.pool = null;
 
     if (!this.cancelled) {
       const durationMs = Date.now() - start;
 
+      // Update totalPoints to actual count if generator produced a different amount
+      const actualTotal = done;
+
       cb.onProgress?.({
         phase: 'finalizing',
         tilesLoaded: tileData.size, tilesTotal: tileKeys.length,
         tilesFailed: this.tiles.getFailedCount(),
-        pointsProcessed: done, pointsTotal: totalPoints,
+        pointsProcessed: actualTotal, pointsTotal: actualTotal,
         percent: 100, estimatedTimeRemaining: 0, startTime: start
       });
 
       if (streaming) {
         const summary: StreamingSummary = {
-          totalProcessed: done,
+          totalProcessed: actualTotal,
           clear: streamClear,
           blocked: streamBlocked,
           noData: streamNoData,
           durationMs,
         };
-        console.log(`Streaming done: ${done.toLocaleString()} points, ${streamClear} clear, ${streamBlocked} blocked, ${streamNoData} noData, ${(durationMs / 1000).toFixed(1)}s`);
-        cb.onComplete?.({ mode: 'streaming', summary });
+        console.log(`Streaming done: ${actualTotal.toLocaleString()} points, ${streamClear} clear, ${streamBlocked} blocked, ${streamNoData} noData, ${(durationMs / 1000).toFixed(1)}s`);
+        // Await onComplete so the consumer can do final flush before we return
+        await cb.onComplete?.({ mode: 'streaming', summary });
       } else {
         const withData = allResults.filter(r => r.hasData !== false).length;
         const noData = allResults.length - withData;
         console.log(`Results: ${withData} with data, ${noData} without data, total time: ${(durationMs / 1000).toFixed(1)}s`);
-        cb.onComplete?.({ mode: 'legacy', results: allResults });
+        await cb.onComplete?.({ mode: 'legacy', results: allResults });
       }
     }
 
