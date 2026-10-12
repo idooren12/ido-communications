@@ -14,11 +14,12 @@ _עודכן: 2026-10-12_
 
 ## הצעד הבא
 1. לוודא ב־Render ש־`JWT_SECRET` מוגדר בשירות `ido-communications-api`. בלעדיו השרת החדש לא יעלה.
-2. לבדוק את ה־preview של ה־PR (deep links, מפה, DSM, RF Safety, PDF).
+2. לבדוק את ה־preview של ה־PR בדפדפן, בעיקר שהמפה ב־`/los` נטענת (MapLibre 6 + CSP), וגם DSM, RF Safety, PDF.
 3. merge ל־`main`. זה מעלה את Vercel ואת Render.
 4. אחרי ה־merge: לבדוק את האתר החי והתחברות.
 
 ## ידוע / פתוח
+- נבדק ב־preview: build, CI, deep links, CSP וקובץ ה־worker של MapLibre. לא נבדק בדפדפן אמיתי (התוסף של Chrome לא היה מחובר): צריך לפתוח את `/los` ב־preview ולוודא שהמפה נטענת.
 - ה־preview ב־Vercel מדבר עם שרת ה־production ב־Render, שעדיין רץ על הקוד הישן עד ה־merge. אם `FRONTEND_URL` מוגדר שם, ה־CORS הישן יחסום קריאות API מכתובת ה־preview (תקין, ייפתר אחרי ה־merge).
 - Render: מכסת שעות משותפת (ראה DECISIONS 2026-10-05), ועדיין `prisma db push` במקום migrations (ראה ROADMAP).
 - `npm audit` בשרת: פגיעויות ב־Prisma CLI (build בלבד), דורש Prisma 8.
