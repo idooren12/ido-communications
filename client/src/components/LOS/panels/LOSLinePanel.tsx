@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Line, XAxis, YAxis, ResponsiveContainer, Area, ComposedChart } from 'recharts';
-import { type LOSResult, RF_FREQUENCIES } from '../../../utils/los/los';
-import { calculateLOSAsync } from '../../../utils/los/workers/workerPool';
+import { type LOSResult, RF_FREQUENCIES, calculateLOS } from '../../../utils/los/los';
+import { MARGINAL_CLEARANCE_M } from '../../../utils/los/core/losCore';
+import { losStatusColor } from '../../../utils/los/losAreaRaster';
 import { haversineDistance, initialBearing, formatDistance } from '../../../utils/los/geo';
 import { useLOSState, type LOSLineParams, type LOSLineResultData } from '../../../contexts/LOSContext';
 import styles from './LOSLinePanel.module.css';
@@ -18,7 +19,8 @@ export default function LOSLinePanel() {
   const [pickMode, setPickMode] = useState<PickMode>('none');
   const [latA, setLatA] = useState('');
   const [lonA, setLonA] = useState('');
-  const [heightA, setHeightA] = useState('2');
+  // Same defaults as the area tool (observer 10 m, target 2 m), so both tools answer the same question.
+  const [heightA, setHeightA] = useState('10');
   const [latB, setLatB] = useState('');
   const [lonB, setLonB] = useState('');
   const [heightB, setHeightB] = useState('2');
@@ -151,15 +153,13 @@ export default function LOSLinePanel() {
     const startTime = performance.now();
 
     try {
-      const options: { sampleStepMeters: number; frequencyMHz?: number } = { sampleStepMeters: 30 };
-      if (calcMode === 'rf') {
-        options.frequencyMHz = RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES];
-      }
+      const frequencyMHz = calcMode === 'rf' ? RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES] : undefined;
 
-      const res = await calculateLOSAsync(
-        { lat: pointA.lat, lon: pointA.lon, antennaHeight: parseFloat(heightA) || 2 },
-        { lat: pointB.lat, lon: pointB.lon, antennaHeight: parseFloat(heightB) || 2 },
-        options
+      // Same model as the area tool (core/losCore.ts). One path is fast enough on the main thread.
+      const res = await calculateLOS(
+        { lat: pointA.lat, lon: pointA.lon, antennaHeight: parseFloat(heightA) || 0 },
+        { lat: pointB.lat, lon: pointB.lon, antennaHeight: parseFloat(heightB) || 0 },
+        { frequencyMHz }
       );
 
       setResult(res);
@@ -208,7 +208,7 @@ export default function LOSLinePanel() {
       params,
       result: resultData,
       visible: true,
-      color: result.clear ? '#10b981' : '#f43f5e',
+      color: losStatusColor(result.status),
     });
 
     // Clear inputs for new calculation
@@ -226,18 +226,16 @@ export default function LOSLinePanel() {
     }));
   }, [result, showFresnel]);
 
+  // Same classes and colours as the area tool's map legend.
   const getStatus = () => {
     if (!result) return null;
-    if (calcMode === 'rf') {
-      if (!result.clear) return { text: t('los.losLine.blocked'), type: 'blocked', icon: '✕' };
-      if (result.fresnelClear === false) return { text: t('los.losLine.fresnelBlocked'), type: 'warning', icon: '⚠' };
-      return { text: t('los.losLine.clear'), type: 'clear', icon: '✓' };
+    switch (result.status) {
+      case 'clear': return { text: t('los.losLine.clear'), type: 'clear', icon: '✓' };
+      case 'fresnel': return { text: t('los.losLine.fresnelBlocked'), type: 'warning', icon: '⚠' };
+      case 'marginal': return { text: t('los.losLine.marginal', { margin: MARGINAL_CLEARANCE_M }), type: 'marginal', icon: '≈' };
+      case 'nodata': return { text: t('los.losLine.noData'), type: 'noData', icon: '?' };
+      default: return { text: t('los.losLine.blocked'), type: 'blocked', icon: '✕' };
     }
-    return {
-      text: result.clear ? t('los.losLine.clear') : t('los.losLine.blocked'),
-      type: result.clear ? 'clear' : 'blocked',
-      icon: result.clear ? '✓' : '✕'
-    };
   };
 
   const status = getStatus();
@@ -428,7 +426,7 @@ export default function LOSLinePanel() {
                   <Line type="monotone" dataKey="fresnelLower" stroke="#f59e0b" strokeWidth={1} strokeDasharray="3 3" dot={false} />
                 </>
               )}
-              <Line type="monotone" dataKey="los" stroke={result?.clear ? '#10b981' : '#f43f5e'} strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="los" stroke={result ? losStatusColor(result.status) : '#f43f5e'} strokeWidth={2} dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>

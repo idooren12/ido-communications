@@ -5,13 +5,36 @@ import { RF_FREQUENCIES } from '../../../utils/los/los';
 import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress, type Completion } from '../../../utils/los/MassiveCalculationEngine';
 import { sphericalPolygonArea, type LatLon } from '../../../utils/los/geo';
 import { useLOSState, type LOSAreaParams, type LOSAreaResultData, type GridCell } from '../../../contexts/LOSContext';
-import { StreamingRasterCanvas, type RasterCell, type GridBounds } from '../../../utils/los/losAreaRaster';
+import { StreamingRasterCanvas, LOS_STATUS_COLORS, type RasterCell, type GridBounds } from '../../../utils/los/losAreaRaster';
+import { MARGINAL_CLEARANCE_M } from '../../../utils/los/core/losCore';
 import type { GridConfig } from '../../../utils/los/gridGenerator';
 import styles from './LOSAreaPanel.module.css';
 
 type CalculationMode = 'optical' | 'rf';
 
 const MAX_POINTS_WARNING = 5000000;
+
+interface AreaStats {
+  total: number;
+  clear: number;
+  fresnel: number;
+  marginal: number;
+  blocked: number;
+  noData: number;
+}
+
+const emptyStats = (): AreaStats => ({ total: 0, clear: 0, fresnel: 0, marginal: 0, blocked: 0, noData: 0 });
+
+function statsFromCells(cells: GridCell[]): AreaStats {
+  const st = emptyStats();
+  for (const c of cells) {
+    st.total++;
+    const status = c.status ?? (c.clear === true ? 'clear' : c.clear === false ? 'blocked' : 'nodata');
+    if (status === 'nodata') st.noData++;
+    else st[status]++;
+  }
+  return st;
+}
 
 export default function LOSAreaPanel() {
   const { t } = useTranslation();
@@ -47,9 +70,9 @@ export default function LOSAreaPanel() {
 
   // Streaming raster refs
   const rasterCanvasRef = useRef<StreamingRasterCanvas | null>(null);
-  const statsRef = useRef({ total: 0, clear: 0, blocked: 0, noData: 0 });
+  const statsRef = useRef<AreaStats>(emptyStats());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [streamStats, setStreamStats] = useState<{ total: number; clear: number; blocked: number; noData: number } | null>(null);
+  const [streamStats, setStreamStats] = useState<AreaStats | null>(null);
 
   useEffect(() => { pickingOriginRef.current = pickingOrigin; }, [pickingOrigin]);
   useEffect(() => { drawingPolygonRef.current = drawingPolygon; }, [drawingPolygon]);
@@ -247,7 +270,7 @@ export default function LOSAreaPanel() {
     setPreviewRasterResult(null);
     rasterCanvasRef.current?.destroy();
     rasterCanvasRef.current = null;
-    statsRef.current = { total: 0, clear: 0, blocked: 0, noData: 0 };
+    statsRef.current = emptyStats();
     const startTime = performance.now();
 
     const res = parseFloat(resolution) || 100;
@@ -336,11 +359,15 @@ export default function LOSAreaPanel() {
 
           // Track cell-level stats
           for (const cell of batch) {
-            statsRef.current.total++;
-            if (!cell.hasData) statsRef.current.noData++;
-            else if (cell.clear === true) statsRef.current.clear++;
-            else if (cell.clear === false) statsRef.current.blocked++;
-            else statsRef.current.noData++;
+            const st = statsRef.current;
+            st.total++;
+            switch (cell.status) {
+              case 'clear': st.clear++; break;
+              case 'fresnel': st.fresnel++; break;
+              case 'marginal': st.marginal++; break;
+              case 'blocked': st.blocked++; break;
+              default: st.noData++;
+            }
           }
 
           dirtyCellsSinceFlush += batch.length;
@@ -367,6 +394,8 @@ export default function LOSAreaPanel() {
             setStreamStats({
               total: completion.summary.totalProcessed,
               clear: completion.summary.clear,
+              fresnel: completion.summary.fresnel,
+              marginal: completion.summary.marginal,
               blocked: completion.summary.blocked,
               noData: completion.summary.noData,
             });
@@ -430,8 +459,9 @@ export default function LOSAreaPanel() {
     if (hasRaster && rasterCanvasRef.current) {
       // Streaming raster path — no cells[] stored
       const rasterResult = rasterCanvasRef.current.getLastResult();
-      const clearCount = streamStats!.clear;
-      const blockedCount = streamStats!.blocked;
+      // "clear" = has line of sight (incl. Fresnel-obstructed); "blocked" incl. marginal
+      const clearCount = streamStats!.clear + streamStats!.fresnel;
+      const blockedCount = streamStats!.blocked + streamStats!.marginal;
       const totalCount = clearCount + blockedCount;
       resultData = {
         rasterUrl: rasterResult?.url,
@@ -485,8 +515,9 @@ export default function LOSAreaPanel() {
   };
 
   // Computed stats: use streaming stats if available, otherwise compute from gridCells
-  const clearCount = streamStats ? streamStats.clear : gridCells.filter(c => c.clear === true).length;
-  const blockedCount = streamStats ? streamStats.blocked : gridCells.filter(c => c.clear === false).length;
+  const shownStats: AreaStats = streamStats ?? statsFromCells(gridCells);
+  const clearCount = shownStats.clear + shownStats.fresnel;
+  const blockedCount = shownStats.blocked + shownStats.marginal;
   const totalCount = clearCount + blockedCount;
   const hasResults = (streamStats && streamStats.total > 0) || gridCells.length > 0;
 
@@ -659,11 +690,21 @@ export default function LOSAreaPanel() {
         <div className={styles.resultCard}>
           <div className={styles.resultStats}>
             <div className={styles.statItem}>
-              <span className={styles.statValue} style={{ color: '#10b981' }}>{clearCount.toLocaleString()}</span>
+              <span className={styles.statValue} style={{ color: LOS_STATUS_COLORS.clear }}>{shownStats.clear.toLocaleString()}</span>
               <span className={styles.statLabel}>{t('los.losArea.clear')}</span>
             </div>
+            {shownStats.fresnel > 0 && (
+              <div className={styles.statItem}>
+                <span className={styles.statValue} style={{ color: LOS_STATUS_COLORS.fresnel }}>{shownStats.fresnel.toLocaleString()}</span>
+                <span className={styles.statLabel}>{t('los.losArea.fresnel')}</span>
+              </div>
+            )}
             <div className={styles.statItem}>
-              <span className={styles.statValue} style={{ color: '#f43f5e' }}>{blockedCount.toLocaleString()}</span>
+              <span className={styles.statValue} style={{ color: LOS_STATUS_COLORS.marginal }}>{shownStats.marginal.toLocaleString()}</span>
+              <span className={styles.statLabel}>{t('los.losArea.marginal', { margin: MARGINAL_CLEARANCE_M })}</span>
+            </div>
+            <div className={styles.statItem}>
+              <span className={styles.statValue} style={{ color: LOS_STATUS_COLORS.blocked }}>{shownStats.blocked.toLocaleString()}</span>
               <span className={styles.statLabel}>{t('los.losArea.blocked')}</span>
             </div>
             <div className={styles.statItem}>
@@ -671,6 +712,7 @@ export default function LOSAreaPanel() {
               <span className={styles.statLabel}>{t('los.losArea.coverage')}</span>
             </div>
           </div>
+          <p className={styles.legendNote}>{t('los.losArea.legendNote', { margin: MARGINAL_CLEARANCE_M })}</p>
           {calcTime && (
             <div className={styles.calcTime}>
               {t('los.losArea.time')}: {calcTime < 1000 ? `${calcTime.toFixed(0)}ms` : `${(calcTime/1000).toFixed(1)}s`}

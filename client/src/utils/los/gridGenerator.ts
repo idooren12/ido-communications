@@ -10,6 +10,7 @@
 
 import { haversineDistance, initialBearing, metersToDegreesLat, metersToDegreesLon, pointInPolygon, sphericalPolygonArea } from './geo';
 import type { GridBounds } from './losAreaRaster';
+import { demZoomForExtent } from './core/terrain';
 
 export interface GridConfig {
   mode: 'sector' | 'polygon';
@@ -183,7 +184,7 @@ export function estimateTotalPoints(config: GridConfig): number {
 }
 
 /**
- * Compute zoom level based on max distance (same as current LOSAreaPanel logic).
+ * DEM zoom for the area: based on its radius (sector) or diagonal (polygon).
  */
 export function computeZoom(config: GridConfig): number {
   const maxD = config.mode === 'polygon' && config.polygonPoints && config.polygonPoints.length >= 3
@@ -199,5 +200,6 @@ export function computeZoom(config: GridConfig): number {
       })()
     : config.maxDistance;
 
-  return maxD > 100000 ? 10 : maxD > 50000 ? 11 : maxD > 10000 ? 12 : 13;
+  // Same rule as the line tool, so a point gets the same terrain in both.
+  return demZoomForExtent(maxD);
 }
