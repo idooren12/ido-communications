@@ -11,7 +11,7 @@ import { apiLimiter } from './lib/rateLimits';
 export function createApp() {
   const app = express();
 
-  // Render terminates TLS in front of us; trust exactly one proxy hop so req.ip
+  // Render / Vercel terminate TLS in front of us; trust exactly one proxy hop so req.ip
   // (used by the rate limiter) is the real client address and cannot be spoofed.
   app.set('trust proxy', 1);
   app.disable('x-powered-by');

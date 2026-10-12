@@ -1,7 +1,11 @@
 import crypto from 'crypto';
 
-/** Render sets RENDER=true on its instances; NODE_ENV is not set there automatically. */
-export const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+/**
+ * Production on any host: Render sets RENDER=true (NODE_ENV is not set there automatically),
+ * Vercel sets VERCEL=1 on builds and functions.
+ */
+export const isProduction =
+  process.env.NODE_ENV === 'production' || process.env.RENDER === 'true' || process.env.VERCEL === '1';
 
 function resolveJwtSecret(): string {
   const secret = process.env.JWT_SECRET;

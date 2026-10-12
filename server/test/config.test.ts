@@ -16,6 +16,15 @@ describe('config', () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
+  it('treats Vercel as production', async () => {
+    vi.stubEnv('JWT_SECRET', 'x'.repeat(32));
+    vi.stubEnv('NODE_ENV', '');
+    vi.stubEnv('RENDER', '');
+    vi.stubEnv('VERCEL', '1');
+    const { isProduction } = await import('../src/config');
+    expect(isProduction).toBe(true);
+  });
+
   it('falls back to the production frontend when FRONTEND_URL is unset', async () => {
     vi.stubEnv('FRONTEND_URL', '');
     const { isAllowedOrigin } = await import('../src/config');

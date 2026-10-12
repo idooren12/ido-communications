@@ -1,12 +1,17 @@
 # משימות
 
 ## פתוח
-- [ ] **ידני ב־Render:** לשנות את ה־Build Command של `ido-communications-api` ל־`npm install && npx prisma generate && npx prisma migrate deploy && npm run build` (ה־baseline כבר מסומן ב־Neon, `DIRECT_URL` כבר מוגדר)
-- [ ] להחליט על פתרון למכסת השעות ב־Render (ראה DECISIONS, 2026-10-05)
+- [ ] **משתמש:** `OPENWEATHERMAP_API_KEY` ב־Vercel, ואז לכבות את Render (ראה `USER_TASKS.md`)
+- [ ] אחרי כיבוי Render: להסיר `*.onrender.com` מה־CSP ואת `RENDER` מ־`config.ts`
+- [ ] migrations אוטומטיות: job ב־CI שמריץ `prisma migrate deploy` על main (דורש secret של `DIRECT_URL` ב־GitHub)
+- [ ] rate limiting משותף בין instances של Vercel (Postgres או Redis), אם התעבורה תגדל
+- [ ] ההמרה ICS → ITM ב־`customDSM.ts` היא היסט קבוע גס. להחליף בהמרה מלאה
 - [ ] כש־Prisma 8 יציב: לשדרג ולהסיר את ה־`overrides` (ראה DECISIONS)
 - [ ] streaming raster pipeline: Phase 2 (לא הוגדר. לברר מה תוכנן)
 
 ## בוצע
+- [x] 2026-10-13: ה־API עבר ל־Vercel Functions (`ido-communications-api`); נבדק מול האתר החי
+- [x] 2026-10-13: מודל LOS אחד לקו ולשטח (PR #3): ברירות מחדל זהות, בילינארי, מחלקות fresnel/marginal, DSM ב־workers
 - [x] 2026-10-12: Node 24 בכל מקום; 0 פגיעויות ב־npm audit (overrides ל־Prisma CLI, vitest 5)
 - [x] 2026-10-12: baseline של migrations סומן ב־Neon, `directUrl`/`DIRECT_URL`
 - [x] 2026-10-12: פיצול `UnifiedMap.tsx` ל־hooks ב־`components/LOS/map/`
