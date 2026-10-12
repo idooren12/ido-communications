@@ -34,6 +34,13 @@
     "prisma": "^6.3.1",
     "supertest": "^7.3.1",
     "typescript": "^5.7.3",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.3"
+  },
+  "engines": {
+    "node": "24.x"
+  },
+  "overrides": {
+    "effect": "^3.20.0",
+    "deepmerge-ts": "^8.0.2"
   }
 }
