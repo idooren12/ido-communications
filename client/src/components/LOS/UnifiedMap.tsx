@@ -1,7 +1,7 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import * as maplibregl from 'maplibre-gl';
+import * as maplibregl from '../../utils/los/maplibre';
 import type * as GeoJSON from 'geojson';
 import { ISRAEL_CENTER, ISRAEL_DEFAULT_ZOOM, ELEVATION_RANGES, TERRAIN_CONFIG, BASEMAP_SOURCES } from '../../utils/los/constants';
 import { haversineDistance, initialBearing, sphericalPolygonArea, formatDistance, formatArea, destinationPoint, metersToDegreesLat, metersToDegreesLon, pointInPolygon, type LatLon } from '../../utils/los/geo';

@@ -4,7 +4,7 @@
  * Improved with smoother gradients and better hillshade effect
  */
 
-import * as maplibregl from 'maplibre-gl';
+import * as maplibregl from './maplibre';
 
 // Protocol state
 let registered = false;
