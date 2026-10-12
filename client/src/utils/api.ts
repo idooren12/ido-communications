@@ -2,20 +2,72 @@ const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
   : '/api';
 
+export function readToken(): string | null {
+  try {
+    return localStorage.getItem('token');
+  } catch {
+    return null;
+  }
+}
+
 function getHeaders(): HeadersInit {
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
-  const token = localStorage.getItem('token');
+  const token = readToken();
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
   return headers;
 }
 
-async function handleResponse(res: Response) {
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.error || 'Request failed');
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
   }
+
+  /** True when the server rejected the credentials (token missing, invalid or expired). */
+  get isAuthError(): boolean {
+    return this.status === 401 || this.status === 403;
+  }
+}
+
+/** Maps an API error to a translation key for the generic (non-field) cases. */
+export function apiErrorKey(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 429) return 'errors.tooManyAttempts';
+    if (err.status >= 500 || err.message === 'SERVER_UNAVAILABLE') return 'errors.serverUnavailable';
+  } else if (err instanceof TypeError) {
+    // fetch() rejects with a TypeError when the server can't be reached at all.
+    return 'errors.serverUnavailable';
+  }
+  return 'errors.serverError';
+}
+
+async function handleResponse(res: Response) {
+  const contentType = res.headers.get('content-type') || '';
+  let data: { error?: string } & Record<string, unknown> = {};
+
+  if (contentType.includes('application/json')) {
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+  }
+
+  if (!res.ok) {
+    // A non-JSON error (e.g. an HTML 502 page while Render wakes up) has no message for the user.
+    const message = data.error || (res.status >= 500 ? 'SERVER_UNAVAILABLE' : 'Request failed');
+    throw new ApiError(message, res.status);
+  }
+
+  if (!contentType.includes('application/json')) {
+    throw new ApiError('SERVER_UNAVAILABLE', res.status);
+  }
+
   return data;
 }
 
@@ -148,6 +200,6 @@ export async function apiClearHistory() {
 
 // Weather (public endpoint — no auth required)
 export async function apiGetWeather(lat: number, lon: number) {
-  const res = await fetch(`${API_BASE}/weather?lat=${lat}&lon=${lon}`);
+  const res = await fetch(`${API_BASE}/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
   return handleResponse(res);
 }

@@ -137,7 +137,10 @@
     "passwordMismatch": "הסיסמאות אינן תואמות",
     "serverError": "שגיאת שרת, נסה שוב",
     "calculationError": "לא ניתן לבצע את החישוב עם הנתונים שהוזנו",
-    "fillRequiredFields": "מלא את כל השדות הנדרשים"
+    "fillRequiredFields": "מלא את כל השדות הנדרשים",
+    "serverUnavailable": "השרת לא מגיב. ייתכן שהוא מתעורר משינה, נסה שוב בעוד דקה.",
+    "tooManyAttempts": "יותר מדי ניסיונות. המתן כמה דקות ונסה שוב.",
+    "passwordTooLong": "הסיסמה יכולה להכיל עד 72 תווים"
   },
   "footer": {
     "copyright": "RF tools © {{year}}"
@@ -405,7 +408,10 @@
       "swap": "החלף נקודות",
       "saveResult": "שמור תוצאה",
       "elevationProfile": "פרופיל גובה",
-      "profile": "פרופיל"
+      "profile": "פרופיל",
+      "losLine": "קו ראייה",
+      "fresnelBlocked": "יש קו ראייה, אבל אזור פרנל חסום חלקית",
+      "minClearance": "מרווח מינימלי"
     },
     "losArea": {
       "title": "חישוב שטח",
@@ -458,7 +464,9 @@
       "polygonMode": "מצולע",
       "drawPolygon": "צייר מצולע",
       "finishDrawing": "סיים ציור",
-      "pointsCount": "נקודות"
+      "pointsCount": "נקודות",
+      "selectOnMap": "לחץ על המפה לבחירת נקודה",
+      "heavyCalculation": "חישוב כבד"
     },
     "peakFinder": {
       "title": "מציאת פסגות",
@@ -491,7 +499,13 @@
       "drawHint": "לחץ על המפה כדי להוסיף נקודות, לחץ כפול לסגירה",
       "searchSettings": "הגדרות חיפוש",
       "optional": "אופציונלי",
-      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?"
+      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?",
+      "finish": "סיום",
+      "clickToAddPoints": "לחץ על המפה להוספת נקודות לפוליגון",
+      "doubleClickToFinish": "לחיצה כפולה לסיום",
+      "estimatedPoints": "מספר נקודות משוער",
+      "peaksFound": "פסגות נמצאו",
+      "searching": "מחפש…"
     },
     "dsm": {
       "title": "העלאת DSM",
@@ -509,7 +523,16 @@
       "priority": "עדיפות",
       "enabled": "מופעל",
       "disabled": "מושבת",
-      "dropzoneText": "גרור קובץ GeoTIFF לכאן או לחץ לבחירה"
+      "dropzoneText": "גרור קובץ GeoTIFF לכאן או לחץ לבחירה",
+      "uploadError": "ההעלאה נכשלה",
+      "uploading": "מעלה…",
+      "layers": "שכבות",
+      "points": "נקודות",
+      "info": "על DSM מותאם",
+      "infoDescription": "אפשר להעלות מודל גבהים ברזולוציה גבוהה, שישמש בחישובי קו ראייה במקום נתוני הגובה הרגילים.",
+      "supportedFormats": "פורמטים נתמכים",
+      "coordinateSystems": "מערכות קואורדינטות",
+      "israel": "ישראל"
     },
     "results": {
       "title": "תוצאות נוכחיות",
@@ -594,5 +617,15 @@
       "pointB": "נקודה B",
       "origin": "נקודת מקור"
     }
+  },
+  "notFound": {
+    "title": "הדף לא נמצא",
+    "description": "הדף שחיפשת לא קיים.",
+    "backHome": "חזרה לדף הבית"
+  },
+  "errorBoundary": {
+    "title": "משהו השתבש",
+    "description": "הדף לא נטען כראוי. טעינה מחדש בדרך כלל פותרת את זה.",
+    "reload": "טען מחדש"
   }
 }

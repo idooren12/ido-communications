@@ -137,7 +137,10 @@
     "passwordMismatch": "Passwords do not match",
     "serverError": "Server error, please try again",
     "calculationError": "Cannot perform calculation with the provided data",
-    "fillRequiredFields": "Please fill in all required fields"
+    "fillRequiredFields": "Please fill in all required fields",
+    "serverUnavailable": "The server is not responding. It may be waking up — try again in a minute.",
+    "tooManyAttempts": "Too many attempts. Please wait a few minutes and try again.",
+    "passwordTooLong": "Password must be at most 72 characters"
   },
   "footer": {
     "copyright": "RF tools © {{year}}"
@@ -405,7 +408,10 @@
       "swap": "Swap points",
       "saveResult": "Save result",
       "elevationProfile": "Elevation profile",
-      "profile": "Profile"
+      "profile": "Profile",
+      "losLine": "LOS line",
+      "fresnelBlocked": "Line of sight is clear, but the Fresnel zone is partially blocked",
+      "minClearance": "Minimum clearance"
     },
     "losArea": {
       "title": "Area Calculation",
@@ -458,7 +464,9 @@
       "polygonMode": "Polygon",
       "drawPolygon": "Draw polygon",
       "finishDrawing": "Finish drawing",
-      "pointsCount": "points"
+      "pointsCount": "points",
+      "selectOnMap": "Click on the map to select a point",
+      "heavyCalculation": "heavy calculation"
     },
     "peakFinder": {
       "title": "Peak Finder",
@@ -469,7 +477,7 @@
       "closePolygon": "Close polygon",
       "clearPolygon": "Clear",
       "searchArea": "Search area",
-      "clickAddPoints": "Click to add points \u2022 double-click to finish",
+      "clickAddPoints": "Click to add points • double-click to finish",
       "maxPeaks": "Max peaks",
       "minSeparation": "Min separation",
       "resolution": "Resolution",
@@ -491,7 +499,13 @@
       "drawHint": "Click map to add points, double-click to close",
       "searchSettings": "Search settings",
       "optional": "Optional",
-      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?"
+      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?",
+      "finish": "Finish",
+      "clickToAddPoints": "Click on the map to add polygon points",
+      "doubleClickToFinish": "Double-click to finish",
+      "estimatedPoints": "Estimated points",
+      "peaksFound": "peaks found",
+      "searching": "Searching…"
     },
     "dsm": {
       "title": "DSM Upload",
@@ -509,7 +523,16 @@
       "priority": "Priority",
       "enabled": "Enabled",
       "disabled": "Disabled",
-      "dropzoneText": "Drag a GeoTIFF file here or click to select"
+      "dropzoneText": "Drag a GeoTIFF file here or click to select",
+      "uploadError": "Upload failed",
+      "uploading": "Uploading…",
+      "layers": "Layers",
+      "points": "points",
+      "info": "About custom DSM",
+      "infoDescription": "Upload a high-resolution elevation model to use instead of the default terrain data in LOS calculations.",
+      "supportedFormats": "Supported formats",
+      "coordinateSystems": "Coordinate systems",
+      "israel": "Israel"
     },
     "results": {
       "title": "Current Results",
@@ -594,5 +617,15 @@
       "pointB": "Point B",
       "origin": "Origin"
     }
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The page you're looking for doesn't exist.",
+    "backHome": "Back to home"
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "description": "The page failed to load. Reloading usually fixes it.",
+    "reload": "Reload page"
   }
 }

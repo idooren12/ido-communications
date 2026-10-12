@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import AntennaList from '../components/Antennas/AntennaList';
+import { ApiError, apiErrorKey } from '../utils/api';
 
 export default function ProfilePage() {
   const { t, i18n } = useTranslation();
@@ -38,6 +39,7 @@ export default function ProfilePage() {
 
     if (!currentPassword) { setPasswordError(t('errors.passwordRequired')); return; }
     if (newPassword.length < 6) { setPasswordError(t('errors.passwordLength')); return; }
+    if (new TextEncoder().encode(newPassword).length > 72) { setPasswordError(t('errors.passwordTooLong')); return; }
     if (newPassword !== confirmNewPassword) { setPasswordError(t('errors.passwordMismatch')); return; }
 
     setPasswordLoading(true);
@@ -48,11 +50,10 @@ export default function ProfilePage() {
       setNewPassword('');
       setConfirmNewPassword('');
     } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('incorrect') || message.includes('wrong')) {
+      if (err instanceof ApiError && err.status === 401) {
         setPasswordError(t('profile.wrongPassword'));
       } else {
-        setPasswordError(t('errors.serverError'));
+        setPasswordError(t(apiErrorKey(err)));
       }
     } finally {
       setPasswordLoading(false);
