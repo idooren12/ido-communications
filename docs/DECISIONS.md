@@ -66,3 +66,13 @@
 - **מגבלה שנשארת:** נתוני הגובה (~30 מ׳) כוללים חלק מהמבנים והעצים, ומטרה בגובה 2 מ׳ רגישה מאוד לזה. חלק מהאדום ליד הנקודה אמיתי לפי הנתונים. כל משבצת מציגה את התוצאה למרכז שלה.
 - **פתוח:** ההמרה ICS (רשת ישראל הישנה) → ITM ב־`customDSM.ts` היא היסט קבוע גס.
 - טסטים: `client/src/utils/los/__tests__/losCore.test.ts` (שטח סינתטי, כולל רגרסיה למדרון קבוע ובדיקה שה־worker נותן בדיוק את תוצאת הקו).
+
+### 2026-10-13: ה־API עבר מ־Render ל־Vercel Functions (סוגר את "מכסת השעות ב־Render")
+- **החלטה:** פרויקט Vercel נפרד, `ido-communications-api` (root: `server`), שמריץ את אותה אפליקציית Express כ־Function אחת (`server/api/index.ts`), באזור fra1, ליד Neon. הלקוח עובר אליו דרך `VITE_API_URL`.
+- **למה פרויקט נפרד ולא `/api` בפרויקט הלקוח:** אין צורך לשנות את הגדרות ה־build של האתר החי, ה־API נפרס ונבדק לבד, ו־rollback הוא רק החלפת `VITE_API_URL`.
+- **למה לא rewrite מהאתר ל־API (same-origin):** ב־rewrite חיצוני לא בטוח שה־IP של המשתמש מגיע ל־rate limiter.
+- **ב־Vercel אין "build" לשרת:** `postinstall` מריץ `prisma generate`. ה־build command הוא typecheck, ותיקיית `public` רק עם `robots.txt` (Vercel דורש output לא ריק).
+- **`JWT_SECRET` חדש:** אי אפשר לקרוא את הערך מ־Render. המחיר: כל משתמש מתחבר מחדש פעם אחת. הנתונים לא נפגעים.
+- **rate limiting** נשאר בזיכרון. ב־Vercel כל instance סופר לבד, אז המגבלה בפועל רופפת יותר. מספיק לתעבורה הנוכחית; אם יידרש, store משותף (Postgres או Redis).
+- **migrations** לא רצות ב־build של Vercel (ראה CLAUDE.md).
+- Render נשאר פעיל כגיבוי עד שהמשתמש מכבה אותו (`USER_TASKS.md`).
