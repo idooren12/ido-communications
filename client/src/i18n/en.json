@@ -233,7 +233,14 @@
     "note1": "This is a minimum theoretical distance under ideal conditions",
     "note2": "In practice, adding a safety margin is recommended",
     "note3": "Calculation assumes continuous transmission (100% duty cycle)",
-    "note4": "Consult a qualified professional before installation"
+    "note4": "Consult a qualified professional before installation",
+    "outOfRange": "ICNIRP reference levels cover {{min}}–{{max}} MHz. Enter a frequency in that range or set the power density manually.",
+    "hfApproximate": "Below 30 MHz ICNIRP 2020 sets electric/magnetic field limits, not a power density. The 30 MHz power density is used here (conservative), and at these frequencies the safe distance is often in the near field, where this formula is not accurate. Measure or use a near-field method.",
+    "nearField": "The result is closer than one wavelength to the antenna (near field). The far-field formula is not reliable there; treat the result as indicative only and measure on site.",
+    "groundReflection": "Include ground reflection (×{{factor}}, FCC OET-65)",
+    "groundReflectionHint": "Recommended. A ray reflected from the ground can add to the direct one and raise power density up to 2.56×, which increases the safe distance by 1.6×.",
+    "reflectionFactor": "Reflection factor",
+    "optional": "optional, used for the near-field check"
   },
   "profile": {
     "title": "My Profile",
@@ -281,7 +288,8 @@
       "realisticPower": "Realistic Power",
       "freeSpacePower": "Free-Space Power (theoretical)",
       "reduction": "Reduction",
-      "inRegion": "in region"
+      "inRegion": "in region",
+      "modelNote": "Estimate for planning. Rain (ITU-R P.838), fog (P.840) and water vapour (P.676) follow ITU-R models; vegetation, urban clutter, terrain and dust are simplified regional approximations. Verify critical links with a field test."
     },
     "lossBreakdown": {
       "title": "Loss Breakdown",

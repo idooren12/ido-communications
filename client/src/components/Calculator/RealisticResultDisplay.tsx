@@ -392,6 +392,10 @@ export default function RealisticResultDisplay({
           </ul>
         </div>
       )}
+
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-4">
+        {t('realistic.result.modelNote')}
+      </p>
     </div>
   );
 }
