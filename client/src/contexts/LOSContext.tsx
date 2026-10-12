@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useReducer, useCallback, useRef, useState, ReactNode } from 'react';
-import type { LOSResult, LOSProfilePoint } from '../utils/los/los';
-import type maplibregl from 'maplibre-gl';
+import React, { createContext, useContext, useReducer, useCallback, useRef, useState, type ReactNode } from 'react';
+import type { LOSProfilePoint } from '../utils/los/los';
+import type * as maplibregl from 'maplibre-gl';
 import type { RasterResult } from '../utils/los/losAreaRaster';
+import i18n from '../i18n/config';
 
 // ==================== Types ====================
 
@@ -189,16 +190,16 @@ function losReducer(state: LOSState, action: LOSAction): LOSState {
           if (r.id !== action.id) return r;
 
           // Clone the params and update the specific point
-          const newParams = { ...r.params } as any;
-
-          if (r.type === 'los-line') {
+          if (r.type === 'los-line' && action.point !== 'origin') {
+            const params = r.params as LOSLineParams;
             const pointKey = action.point === 'A' ? 'pointA' : 'pointB';
-            newParams[pointKey] = { ...newParams[pointKey], ...action.updates };
-          } else if (r.type === 'los-area' && action.point === 'origin') {
-            newParams.origin = { ...newParams.origin, ...action.updates };
+            return { ...r, params: { ...params, [pointKey]: { ...params[pointKey], ...action.updates } } };
           }
-
-          return { ...r, params: newParams };
+          if (r.type === 'los-area' && action.point === 'origin') {
+            const params = r.params as LOSAreaParams;
+            return { ...r, params: { ...params, origin: { ...params.origin, ...action.updates } } };
+          }
+          return r;
         }),
       };
 
@@ -419,7 +420,7 @@ export function LOSProvider({ children }: LOSProviderProps) {
     const backupResult: CalculationResult = {
       ...JSON.parse(JSON.stringify(result)),
       id: generateId(),
-      name: `${result.name} (גיבוי)`,
+      name: `${result.name} (${i18n.t('los.projects.backupSuffix')})`,
       visible: false,
       timestamp: new Date(),
     };

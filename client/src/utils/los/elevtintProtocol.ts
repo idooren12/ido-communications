@@ -4,7 +4,7 @@
  * Improved with smoother gradients and better hillshade effect
  */
 
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 
 // Protocol state
 let registered = false;
@@ -422,7 +422,7 @@ export function unregisterElevtintProtocol(): void {
 
   try {
     maplibregl.removeProtocol('elevtint');
-  } catch (e) {
+  } catch {
     // Protocol might not exist
   }
 

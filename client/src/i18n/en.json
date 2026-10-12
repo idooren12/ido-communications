@@ -158,9 +158,9 @@
     "distance": "Distance",
     "power": "Power",
     "frequency": "Frequency",
-    "km": "Kilometers",
+    "km": "km",
     "mi": "Miles",
-    "m": "Meters",
+    "m": "m",
     "ft": "Feet",
     "nmi": "Nautical miles",
     "W": "Watt",
@@ -170,7 +170,10 @@
     "Hz": "Hertz",
     "kHz": "Kilohertz",
     "MHz": "Megahertz",
-    "GHz": "Gigahertz"
+    "GHz": "Gigahertz",
+    "m2": "m²",
+    "dunam": "dunam",
+    "km2": "km²"
   },
   "pdf": {
     "export": "Export to PDF",
@@ -467,14 +470,15 @@
       "azimuthRange": "Azimuth range",
       "estimatedPoints": "Estimated points",
       "tooManyPoints": "Too many points: {{count}} (max: {{max}})",
-      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?",
+      "heavyCalculationConfirm": "Heavy calculation ({{formatted}} points). Continue?",
       "sectorMode": "Sector",
       "polygonMode": "Polygon",
       "drawPolygon": "Draw polygon",
       "finishDrawing": "Finish drawing",
       "pointsCount": "points",
       "selectOnMap": "Click on the map to select a point",
-      "heavyCalculation": "heavy calculation"
+      "heavyCalculation": "heavy calculation",
+      "maxPointsExceeded": "Maximum {{max}} points"
     },
     "peakFinder": {
       "title": "Peak Finder",
@@ -507,7 +511,7 @@
       "drawHint": "Click map to add points, double-click to close",
       "searchSettings": "Search settings",
       "optional": "Optional",
-      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?",
+      "heavyCalculationConfirm": "Heavy calculation ({{formatted}} points). Continue?",
       "finish": "Finish",
       "clickToAddPoints": "Click on the map to add polygon points",
       "doubleClickToFinish": "Double-click to finish",
@@ -540,7 +544,18 @@
       "infoDescription": "Upload a high-resolution elevation model to use instead of the default terrain data in LOS calculations.",
       "supportedFormats": "Supported formats",
       "coordinateSystems": "Coordinate systems",
-      "israel": "Israel"
+      "israel": "Israel",
+      "errors": {
+        "unsupportedFormat": "Unsupported file type: {{ext}}",
+        "readError": "Error reading the file: {{message}}",
+        "ascMissingHeader": "The ASC file header is missing required fields",
+        "resUnknownFormat": "Unrecognized RES file format",
+        "resHeaderError": "Error reading the RES header",
+        "hgtInvalidSize": "Invalid HGT file size: {{size}} values",
+        "hgtNoCoordinates": "Could not read coordinates from the file name (expected e.g. N31E034.hgt)",
+        "geotiffError": "Error reading GeoTIFF: {{message}}",
+        "imgUnsupported": "IMG is a complex format. Convert it to ASC or GeoTIFF with QGIS/GDAL."
+      }
     },
     "results": {
       "title": "Current Results",
@@ -606,7 +621,8 @@
       "exportToFile": "Export to file",
       "results": "results",
       "update": "Update",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "backupSuffix": "backup"
     },
     "common": {
       "meters": "m",
@@ -624,6 +640,36 @@
       "pointA": "Point A",
       "pointB": "Point B",
       "origin": "Origin"
+    },
+    "validation": {
+      "invalidCoordinates": "Invalid coordinates",
+      "antennaHeightA": "Antenna A height is out of range",
+      "antennaHeightB": "Antenna B height is out of range",
+      "longDistance": "Distance over 200 km — accuracy may drop",
+      "shortDistance": "Very short distance — LOS calculation may be unnecessary",
+      "partialData": "Partial elevation data (only {{percent}}%)",
+      "constantElevation": "All elevation values are identical — possible data error",
+      "missingData": "Missing data: {{percent}}% of points",
+      "suspiciousJumps": "Suspicious jumps in the data ({{count}} points)"
+    },
+    "popup": {
+      "optical": "Optical",
+      "edit": "Edit",
+      "delete": "Delete",
+      "latitude": "Latitude",
+      "longitude": "Longitude",
+      "height": "Height",
+      "unavailable": "unavailable",
+      "peak": "Peak #{{rank}}",
+      "losClear": "Line of sight clear",
+      "losBlocked": "Line of sight blocked",
+      "point": "Point {{label}}",
+      "mode": "Mode",
+      "origin": "Origin point",
+      "targetHeight": "Target height",
+      "range": "Range",
+      "azimuth": "Azimuth",
+      "resolution": "Resolution"
     }
   },
   "notFound": {

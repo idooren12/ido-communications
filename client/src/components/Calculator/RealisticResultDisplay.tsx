@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUnits } from '../../contexts/UnitsContext';
 import { fromKm } from '../../utils/unitConversions';
-import { generatePDF } from '../../utils/pdfExport';
+import { wattToDbm } from '../../utils/friisCalculations';
 import type {
   RealisticResult,
   RealisticPowerResult,
@@ -28,6 +28,15 @@ interface Props {
   result: RealisticCalcResult;
   regionNameHe: string;
   regionNameEn: string;
+  /** The values the user entered, for the PDF report. */
+  inputs: {
+    txPowerWatts: number;
+    txGainDbi: number;
+    rxGainDbi: number;
+    frequencyMhz: number;
+    sensitivityDbm?: number;
+    distanceKm?: number;
+  };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -65,6 +74,7 @@ export default function RealisticResultDisplay({
   result,
   regionNameHe,
   regionNameEn,
+  inputs,
 }: Props) {
   const { t, i18n } = useTranslation();
   const { distanceUnit } = useUnits();
@@ -211,23 +221,26 @@ export default function RealisticResultDisplay({
           {copied ? t('pdf.copied') : t('pdf.copy')}
         </button>
         <button
-          onClick={() => {
+          onClick={async () => {
+            const { generatePDF } = await import('../../utils/pdfExport');
             const allRows = [...envRows, ...atmosRows].map(r => ({
               label: t(r.labelKey),
               value: r.value,
             }));
             generatePDF({
               mode: isDistance ? 'distance' : 'power',
-              txPowerWatts: 0,
-              txGainDbi: 0,
-              rxGainDbi: 0,
-              frequencyMhz: 0,
+              txPowerWatts: inputs.txPowerWatts,
+              txGainDbi: inputs.txGainDbi,
+              rxGainDbi: inputs.rxGainDbi,
+              frequencyMhz: inputs.frequencyMhz,
+              sensitivityDbm: isDistance ? inputs.sensitivityDbm : undefined,
+              distanceKm: isDistance ? undefined : inputs.distanceKm,
               resultValue: primaryValue,
               resultUnit: primaryUnit,
               details: {
-                txPowerDbm: 0,
-                totalGain: 0,
-                frequencyMhz: 0,
+                txPowerDbm: wattToDbm(inputs.txPowerWatts),
+                totalGain: inputs.txGainDbi + inputs.rxGainDbi,
+                frequencyMhz: inputs.frequencyMhz,
               },
               labels: {
                 title: t('pdf.title'),

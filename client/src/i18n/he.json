@@ -158,9 +158,9 @@
     "distance": "מרחק",
     "power": "הספק",
     "frequency": "תדר",
-    "km": "קילומטרים",
+    "km": "ק\"מ",
     "mi": "מיילים",
-    "m": "מטרים",
+    "m": "מ'",
     "ft": "רגל",
     "nmi": "מיילים ימיים",
     "W": "וואט",
@@ -170,7 +170,10 @@
     "Hz": "הרץ",
     "kHz": "קילוהרץ",
     "MHz": "מגהרץ",
-    "GHz": "גיגהרץ"
+    "GHz": "גיגהרץ",
+    "m2": "מ\"ר",
+    "dunam": "דונם",
+    "km2": "קמ\"ר"
   },
   "pdf": {
     "export": "ייצוא ל-PDF",
@@ -467,14 +470,15 @@
       "azimuthRange": "טווח אזימוט",
       "estimatedPoints": "נקודות משוערות",
       "tooManyPoints": "יותר מדי נקודות: {{count}} (מקסימום: {{max}})",
-      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?",
+      "heavyCalculationConfirm": "חישוב כבד ({{formatted}} נקודות). להמשיך?",
       "sectorMode": "סקטור",
       "polygonMode": "מצולע",
       "drawPolygon": "צייר מצולע",
       "finishDrawing": "סיים ציור",
       "pointsCount": "נקודות",
       "selectOnMap": "לחץ על המפה לבחירת נקודה",
-      "heavyCalculation": "חישוב כבד"
+      "heavyCalculation": "חישוב כבד",
+      "maxPointsExceeded": "מקסימום {{max}} נקודות"
     },
     "peakFinder": {
       "title": "מציאת פסגות",
@@ -507,7 +511,7 @@
       "drawHint": "לחץ על המפה כדי להוסיף נקודות, לחץ כפול לסגירה",
       "searchSettings": "הגדרות חיפוש",
       "optional": "אופציונלי",
-      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?",
+      "heavyCalculationConfirm": "חישוב כבד ({{formatted}} נקודות). להמשיך?",
       "finish": "סיום",
       "clickToAddPoints": "לחץ על המפה להוספת נקודות לפוליגון",
       "doubleClickToFinish": "לחיצה כפולה לסיום",
@@ -540,7 +544,18 @@
       "infoDescription": "אפשר להעלות מודל גבהים ברזולוציה גבוהה, שישמש בחישובי קו ראייה במקום נתוני הגובה הרגילים.",
       "supportedFormats": "פורמטים נתמכים",
       "coordinateSystems": "מערכות קואורדינטות",
-      "israel": "ישראל"
+      "israel": "ישראל",
+      "errors": {
+        "unsupportedFormat": "סוג קובץ לא נתמך: {{ext}}",
+        "readError": "שגיאה בקריאת הקובץ: {{message}}",
+        "ascMissingHeader": "חסרים שדות בכותרת קובץ ASC",
+        "resUnknownFormat": "לא ניתן לזהות פורמט קובץ RES",
+        "resHeaderError": "שגיאה בקריאת כותרת RES",
+        "hgtInvalidSize": "גודל קובץ HGT לא תקין: {{size}} ערכים",
+        "hgtNoCoordinates": "לא ניתן לחלץ קואורדינטות משם הקובץ (צפוי למשל N31E034.hgt)",
+        "geotiffError": "שגיאה בקריאת GeoTIFF: {{message}}",
+        "imgUnsupported": "פורמט IMG מורכב. מומלץ להמיר ל־ASC או GeoTIFF באמצעות QGIS/GDAL."
+      }
     },
     "results": {
       "title": "תוצאות נוכחיות",
@@ -606,7 +621,8 @@
       "exportToFile": "ייצוא לקובץ",
       "results": "תוצאות",
       "update": "עדכן",
-      "cancel": "ביטול"
+      "cancel": "ביטול",
+      "backupSuffix": "גיבוי"
     },
     "common": {
       "meters": "מ'",
@@ -624,6 +640,36 @@
       "pointA": "נקודה A",
       "pointB": "נקודה B",
       "origin": "נקודת מקור"
+    },
+    "validation": {
+      "invalidCoordinates": "קואורדינטות לא חוקיות",
+      "antennaHeightA": "גובה אנטנה A חריג",
+      "antennaHeightB": "גובה אנטנה B חריג",
+      "longDistance": "מרחק גדול מ־200 ק\"מ, הדיוק עלול לרדת",
+      "shortDistance": "מרחק קצר מאוד, ייתכן שאין צורך בחישוב קו ראייה",
+      "partialData": "נתוני גובה חלקיים ({{percent}}% בלבד)",
+      "constantElevation": "כל ערכי הגובה זהים, ייתכן שיש שגיאה בנתונים",
+      "missingData": "נתונים חסרים: {{percent}}% מהנקודות",
+      "suspiciousJumps": "קפיצות חריגות בנתונים ({{count}} נקודות)"
+    },
+    "popup": {
+      "optical": "אופטי",
+      "edit": "שנה",
+      "delete": "מחק",
+      "latitude": "קו רוחב",
+      "longitude": "קו אורך",
+      "height": "גובה",
+      "unavailable": "לא זמין",
+      "peak": "פסגה #{{rank}}",
+      "losClear": "קו ראייה פתוח",
+      "losBlocked": "קו ראייה חסום",
+      "point": "נקודה {{label}}",
+      "mode": "מצב",
+      "origin": "נקודת מקור",
+      "targetHeight": "גובה יעד",
+      "range": "טווח",
+      "azimuth": "אזימוט",
+      "resolution": "רזולוציה"
     }
   },
   "notFound": {

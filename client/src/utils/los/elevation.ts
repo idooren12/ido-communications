@@ -3,6 +3,7 @@
  * Handles terrain tile loading, caching, elevation decoding with improved accuracy
  */
 
+import i18n from '../../i18n/config';
 import { generateBoundsSamplePoints, clampLat, normalizeLng, type Bounds } from './geo';
 
 // Custom DSM support - lazy loaded
@@ -12,7 +13,7 @@ async function loadCustomDSM() {
   if (customDSMModule) return customDSMModule;
   try {
     customDSMModule = await import('./customDSM');
-  } catch (e) {
+  } catch {
     customDSMModule = { getCustomElevation: () => null };
   }
   return customDSMModule;
@@ -695,7 +696,7 @@ export function validatePathElevations(
   // Check coverage
   const coverage = valid.length / elevations.length;
   if (coverage < 0.5) {
-    issues.push(`\u05E0\u05EA\u05D5\u05E0\u05D9\u05DD \u05D7\u05E1\u05E8\u05D9\u05DD: ${Math.round((1 - coverage) * 100)}% \u05DE\u05D4\u05E0\u05E7\u05D5\u05D3\u05D5\u05EA`);
+    issues.push(i18n.t('los.validation.missingData', { percent: Math.round((1 - coverage) * 100) }));
   }
 
   // Check for suspicious jumps
@@ -710,13 +711,13 @@ export function validatePathElevations(
   }
 
   if (jumpCount > valid.length * 0.1) {
-    issues.push(`\u05E7\u05E4\u05D9\u05E6\u05D5\u05EA \u05D7\u05E8\u05D9\u05D2\u05D5\u05EA \u05D1\u05E0\u05EA\u05D5\u05E0\u05D9\u05DD (${jumpCount} \u05E0\u05E7\u05D5\u05D3\u05D5\u05EA)`);
+    issues.push(i18n.t('los.validation.suspiciousJumps', { count: jumpCount }));
   }
 
   // Check for constant values (might indicate data issue)
   const uniqueValues = new Set(valid.map(v => Math.round(v))).size;
   if (uniqueValues === 1 && valid.length > 10) {
-    issues.push('\u05DB\u05DC \u05D4\u05E0\u05EA\u05D5\u05E0\u05D9\u05DD \u05D6\u05D4\u05D9\u05DD - \u05D9\u05D9\u05EA\u05DB\u05DF \u05E9\u05D2\u05D9\u05D0\u05D4');
+    issues.push(i18n.t('los.validation.constantElevation'));
   }
 
   // Determine quality
@@ -731,28 +732,6 @@ export function validatePathElevations(
     issues,
     quality,
   };
-}
-
-/**
- * Format elevation for display
- */
-export function formatElevation(elevation: number | null): string {
-  if (elevation === null) return '\u2014';
-  return `${Math.round(elevation)} \u05DE'`;
-}
-
-/**
- * Format quality for display
- */
-export function formatQuality(quality: ElevationQuality): string {
-  const labels: Record<ElevationQuality, string> = {
-    high: '\u05D2\u05D1\u05D5\u05D4',
-    medium: '\u05D1\u05D9\u05E0\u05D5\u05E0\u05D9',
-    low: '\u05E0\u05DE\u05D5\u05DA',
-    interpolated: '\u05DE\u05E9\u05D5\u05E2\u05E8\u05DA',
-    unknown: '\u05DC\u05D0 \u05D9\u05D3\u05D5\u05E2',
-  };
-  return labels[quality];
 }
 
 /**

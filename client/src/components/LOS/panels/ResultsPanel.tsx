@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLOSState, isLOSLineResult, isLOSAreaResult, isPeakFinderResult, type CalculationResult } from '../../../contexts/LOSContext';
 import { formatDistance } from '../../../utils/los/geo';
@@ -15,11 +15,13 @@ function ResultItem({ result }: { result: CalculationResult }) {
   const { t } = useTranslation();
   const { toggleResultVisibility, removeResult, setResultColor, mapRef, updateResultName, editResultInPanel } = useLOSState();
   const [editName, setEditName] = useState(result.name);
+  const [syncedName, setSyncedName] = useState(result.name);
 
-  // Keep editName in sync if result.name changes externally
-  useEffect(() => {
+  // Keep editName in sync if result.name changes externally (adjust state during render).
+  if (result.name !== syncedName) {
+    setSyncedName(result.name);
     setEditName(result.name);
-  }, [result.name]);
+  }
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setEditName(e.target.value);

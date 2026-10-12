@@ -36,7 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!readToken()) return;
     apiGetMe()
-      .then(data => setUser(data.user as User))
+      .then(data => setUser(data.user))
       .catch((err: unknown) => {
         // Log out only when the server actually rejected the token. A network error or a
         // sleeping server (Render free tier) must not throw away a valid session.
@@ -49,14 +49,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const data = await apiLogin(username, password);
-    storeToken(data.token as string);
-    setUser(data.user as User);
+    storeToken(data.token);
+    setUser(data.user);
   };
 
   const register = async (username: string, password: string) => {
     const data = await apiRegister(username, password);
-    storeToken(data.token as string);
-    setUser(data.user as User);
+    storeToken(data.token);
+    setUser(data.user);
   };
 
   const logout = () => {

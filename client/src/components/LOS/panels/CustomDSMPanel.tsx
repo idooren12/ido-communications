@@ -1,19 +1,26 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import styles from './CustomDSMPanel.module.css';
+import type { CustomDSMLayer } from '../../../utils/los/customDSM';
 
 interface DSMLayer {
   id: string;
   name: string;
-  bounds: {
-    north: number;
-    south: number;
-    east: number;
-    west: number;
-  };
   resolution: number;
   pointCount: number;
 }
+
+function toPanelLayer(layer: CustomDSMLayer): DSMLayer {
+  return {
+    id: layer.id,
+    name: layer.name,
+    resolution: layer.resolution || 0,
+    pointCount: layer.data?.length || 0,
+  };
+}
+
+// The DSM module pulls in geotiff, so it is only loaded when this panel is used.
+const loadDsmModule = () => import('../../../utils/los/customDSM');
 
 export default function CustomDSMPanel() {
   const { t } = useTranslation();
@@ -23,24 +30,23 @@ export default function CustomDSMPanel() {
   const [error, setError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
-  // Load existing layers on mount
+  // Mirror the module's layer list (also reflects layers added or removed elsewhere).
   useEffect(() => {
-    const loadLayers = async () => {
-      try {
-        const dsmModule = await import('../../../utils/los/customDSM');
-        const existingLayers = dsmModule.getCustomLayers();
-        setLayers(existingLayers.map((layer: any) => ({
-          id: layer.id || layer.name,
-          name: layer.name,
-          bounds: layer.bounds,
-          resolution: layer.resolution || 0,
-          pointCount: layer.data?.length || 0,
-        })));
-      } catch (e) {
-        console.warn('Could not load DSM layers:', e);
-      }
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    loadDsmModule()
+      .then(dsm => {
+        if (cancelled) return;
+        setLayers(dsm.getCustomLayers().map(toPanelLayer));
+        unsubscribe = dsm.onLayersChange(next => setLayers(next.map(toPanelLayer)));
+      })
+      .catch(e => console.warn('Could not load DSM layers:', e));
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
     };
-    loadLayers();
   }, []);
 
   const handleFiles = useCallback(async (files: FileList) => {
@@ -51,35 +57,31 @@ export default function CustomDSMPanel() {
     setError(null);
 
     try {
-      const dsmModule = await import('../../../utils/los/customDSM');
+      const dsm = await loadDsmModule();
+      const failures: string[] = [];
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setProgress(Math.round(((i + 0.5) / files.length) * 100));
 
-        const result = await dsmModule.loadCustomDSM(file);
-
-        if (result) {
-          const newLayer: DSMLayer = {
-            id: result.name || file.name,
-            name: result.name || file.name,
-            bounds: result.bounds,
-            resolution: result.resolution || 0,
-            pointCount: result.data?.length || 0,
-          };
-
-          setLayers(prev => [...prev.filter(l => l.id !== newLayer.id), newLayer]);
+        const result = await dsm.parseUploadedDSM(file);
+        if (result.success && result.layer) {
+          dsm.addCustomLayer(result.layer);
+        } else {
+          failures.push(`${file.name}: ${result.error || t('los.dsm.uploadError')}`);
         }
 
         setProgress(Math.round(((i + 1) / files.length) * 100));
       }
-    } catch (e: any) {
-      setError(e.message || t('los.dsm.uploadError'));
-      console.error('DSM upload error:', e);
-    }
 
-    setUploading(false);
-  }, []);
+      if (failures.length > 0) setError(failures.join('\n'));
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : t('los.dsm.uploadError'));
+      console.error('DSM upload error:', e);
+    } finally {
+      setUploading(false);
+    }
+  }, [t]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -106,13 +108,13 @@ export default function CustomDSMPanel() {
     if (e.target.files) {
       handleFiles(e.target.files);
     }
+    e.target.value = ''; // allow selecting the same file again
   }, [handleFiles]);
 
   const handleRemoveLayer = useCallback(async (id: string) => {
     try {
-      const dsmModule = await import('../../../utils/los/customDSM');
-      dsmModule.removeCustomLayer(id);
-      setLayers(prev => prev.filter(l => l.id !== id));
+      const dsm = await loadDsmModule();
+      dsm.removeCustomLayer(id);
     } catch (e) {
       console.error('Error removing layer:', e);
     }
@@ -155,7 +157,7 @@ export default function CustomDSMPanel() {
       )}
 
       {error && (
-        <div className={styles.error}>{error}</div>
+        <div className={styles.error} style={{ whiteSpace: 'pre-line' }}>{error}</div>
       )}
 
       <div className={styles.layersList}>

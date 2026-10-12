@@ -12,6 +12,7 @@
 import { TERRAIN_CONFIG } from './constants';
 import { type GridConfig, generatePointChunks, computeBounds, estimateTotalPoints, computeZoom } from './gridGenerator';
 import type { RasterCell, GridBounds } from './losAreaRaster';
+import i18n from '../../i18n/config';
 
 // ============================================================================
 // Types
@@ -55,14 +56,24 @@ export interface StreamingSummary {
 }
 
 /** Discriminated union for onComplete */
+/** One point as returned by a calculation worker. */
+export interface WorkerPointResult {
+  lat: number;
+  lon: number;
+  clear?: boolean | null;
+  fresnelClear?: boolean | null;
+  hasData?: boolean;
+  [key: string]: unknown;
+}
+
 export type Completion =
-  | { mode: 'legacy'; results: any[] }
+  | { mode: 'legacy'; results: WorkerPointResult[] }
   | { mode: 'streaming'; summary: StreamingSummary };
 
 export interface EngineCallbacks {
   onProgress?: (progress: TaskProgress) => void;
   /** Legacy: receives entire accumulated results array */
-  onPartialResult?: (partialResult: any[], progress: TaskProgress) => void;
+  onPartialResult?: (partialResult: WorkerPointResult[], progress: TaskProgress) => void;
   /** Streaming: receives only new batch results (no accumulation) */
   onBatchResult?: (batch: RasterCell[], progress: TaskProgress) => void;
   /** Called when bounds and total points are known, before tile loading */
@@ -310,7 +321,7 @@ class TileManager {
         this.cache.set(key, ctx.getImageData(0, 0, 256, 256));
         return true;
 
-      } catch (e) {
+      } catch {
         if (parentSignal?.aborted) return false;
         if (attempt < TILE_RETRY_COUNT - 1) {
           await new Promise(r => setTimeout(r, TILE_RETRY_DELAY * (attempt + 1)));
@@ -349,7 +360,7 @@ class WorkerPool {
 
   async sendTiles(data: Map<string, Uint8ClampedArray>): Promise<number[]> {
     const obj: Record<string, ArrayBuffer> = {};
-    data.forEach((v, k) => { obj[k] = v.buffer.slice(0); });
+    data.forEach((v, k) => { obj[k] = v.slice().buffer as ArrayBuffer; });
 
     const results = await Promise.all(this.workers.map((w, i) => new Promise<number>((res, rej) => {
       const t = setTimeout(() => rej(new Error('Worker timeout')), 30000);
@@ -367,7 +378,7 @@ class WorkerPool {
     return results;
   }
 
-  async calc(idx: number, points: any[], config: any): Promise<any[]> {
+  async calc(idx: number, points: Array<{ lat: number; lon: number }>, config: Record<string, unknown>): Promise<WorkerPointResult[]> {
     return new Promise((res, rej) => {
       const w = this.workers[idx];
       const id = Date.now() + '-' + idx + '-' + Math.random();
@@ -415,7 +426,7 @@ class Engine {
   private cancelled = false;
   private paused = false;
 
-  async calculate(config: TaskConfig, cb: EngineCallbacks = {}): Promise<any[]> {
+  async calculate(config: TaskConfig, cb: EngineCallbacks = {}): Promise<WorkerPointResult[]> {
     this.cancelled = false;
     this.paused = false;
     const start = Date.now();
@@ -463,7 +474,7 @@ class Engine {
         return [];
       }
       if (totalPoints > MAX_POINTS) {
-        const err = `מקסימום ${MAX_POINTS.toLocaleString()} נקודות`;
+        const err = i18n.t('los.losArea.maxPointsExceeded', { max: MAX_POINTS.toLocaleString() });
         cb.onError?.(err);
         throw new Error(err);
       }
@@ -518,7 +529,7 @@ class Engine {
     // ---- Calculation loop ----
     // Streaming mode: no allResults[], call onBatchResult per batch
     // Legacy mode: accumulate in allResults[], call onPartialResult periodically
-    const allResults: any[] = streaming ? [] : []; // legacy: accumulates; streaming: stays empty
+    const allResults: WorkerPointResult[] = []; // legacy: accumulates; streaming: stays empty
     let done = 0;
     let streamClear = 0, streamBlocked = 0, streamNoData = 0;
 
@@ -813,8 +824,7 @@ export function getMassiveEngine(): Engine {
   return instance;
 }
 
-export async function smartCalculate(config: TaskConfig, cb: EngineCallbacks = {}): Promise<any[]> {
+export async function smartCalculate(config: TaskConfig, cb: EngineCallbacks = {}): Promise<WorkerPointResult[]> {
   return getMassiveEngine().calculate(config, cb);
 }
 
-export type { TaskProgress, TaskConfig, EngineCallbacks, StreamingSummary, Completion };

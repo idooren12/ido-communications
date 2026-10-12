@@ -16,7 +16,6 @@ export const ELEVATION_RANGES = {
   fixed: {
     min: -450,
     max: 2000,
-    label: '\u05E7\u05D1\u05D5\u05E2',
   },
   // Actual Israel elevations
   israel: {

@@ -3,7 +3,8 @@
  * Supports optical and RF calculations with Fresnel zone
  */
 
-import { haversineDistance, initialBearing, interpolateGreatCircle, type LatLon } from './geo';
+import i18n from '../../i18n/config';
+import { haversineDistance, initialBearing, interpolateGreatCircle } from './geo';
 import { batchSampleElevations, type EncodingType } from './elevation';
 import { TERRAIN_CONFIG } from './constants';
 
@@ -377,23 +378,23 @@ function validateLOSInput(
 
   // Check coordinates are valid
   if (pointA.lat < -90 || pointA.lat > 90 || pointB.lat < -90 || pointB.lat > 90) {
-    errors.push('\u05E7\u05D5\u05D0\u05D5\u05E8\u05D3\u05D9\u05E0\u05D8\u05D5\u05EA \u05DC\u05D0 \u05D7\u05D5\u05E7\u05D9\u05D5\u05EA');
+    errors.push(i18n.t('los.validation.invalidCoordinates'));
   }
 
   // Check antenna heights are reasonable
   if (pointA.antennaHeight < 0 || pointA.antennaHeight > 1000) {
-    warnings.push('\u05D2\u05D5\u05D1\u05D4 \u05D0\u05E0\u05D8\u05E0\u05D4 A \u05D7\u05E8\u05D9\u05D2');
+    warnings.push(i18n.t('los.validation.antennaHeightA'));
   }
   if (pointB.antennaHeight < 0 || pointB.antennaHeight > 1000) {
-    warnings.push('\u05D2\u05D5\u05D1\u05D4 \u05D0\u05E0\u05D8\u05E0\u05D4 B \u05D7\u05E8\u05D9\u05D2');
+    warnings.push(i18n.t('los.validation.antennaHeightB'));
   }
 
   // Check distance
   if (distance > 200000) {
-    warnings.push('\u05DE\u05E8\u05D7\u05E7 \u05D2\u05D3\u05D5\u05DC \u05DE-200 \u05E7"\u05DE - \u05D3\u05D9\u05D5\u05E7 \u05E2\u05E9\u05D5\u05D9 \u05DC\u05E8\u05D3\u05EA');
+    warnings.push(i18n.t('los.validation.longDistance'));
   }
   if (distance < 10) {
-    warnings.push('\u05DE\u05E8\u05D7\u05E7 \u05E7\u05E6\u05E8 \u05DE\u05D0\u05D5\u05D3 - \u05D9\u05D9\u05EA\u05DB\u05DF \u05E9\u05D0\u05D9\u05DF \u05E6\u05D5\u05E8\u05DA \u05D1\u05D7\u05D9\u05E9\u05D5\u05D1 LOS');
+    warnings.push(i18n.t('los.validation.shortDistance'));
   }
 
   // Check data quality
@@ -401,13 +402,13 @@ function validateLOSInput(
   const coverage = validCount / elevations.length;
 
   if (coverage < 0.5) {
-    warnings.push(`\u05E0\u05EA\u05D5\u05E0\u05D9 \u05D2\u05D5\u05D1\u05D4 \u05D7\u05DC\u05E7\u05D9\u05D9\u05DD (${Math.round(coverage * 100)}% \u05D1\u05DC\u05D1\u05D3)`);
+    warnings.push(i18n.t('los.validation.partialData', { percent: Math.round(coverage * 100) }));
   }
 
   // Check for constant elevations (might indicate data issue)
   const uniqueElevations = new Set(elevations.filter(e => e !== null).map(e => Math.round(e!))).size;
   if (uniqueElevations === 1 && elevations.length > 20) {
-    warnings.push('\u05DB\u05DC \u05E0\u05E7\u05D5\u05D3\u05D5\u05EA \u05D4\u05D2\u05D5\u05D1\u05D4 \u05D6\u05D4\u05D5\u05EA - \u05D9\u05D9\u05EA\u05DB\u05DF \u05E9\u05D2\u05D9\u05D0\u05D4 \u05D1\u05E0\u05EA\u05D5\u05E0\u05D9\u05DD');
+    warnings.push(i18n.t('los.validation.constantElevation'));
   }
 
   return {
@@ -451,13 +452,7 @@ export async function quickLOSCheck(
   return { clear: result.clear, confidence: result.confidence };
 }
 
-/**
- * Format distance for display
- */
-export function formatDistance(meters: number): string {
-  if (meters < 1000) return `${Math.round(meters)} \u05DE'`;
-  return `${(meters / 1000).toFixed(2)} \u05E7"\u05DE`;
-}
+export { formatDistance } from './geo';
 
 /**
  * Format frequency for display

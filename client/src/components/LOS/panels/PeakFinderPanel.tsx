@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import type * as maplibregl from 'maplibre-gl';
 import { pointInPolygon, metersToDegreesLat, metersToDegreesLon, haversineDistance, sphericalPolygonArea, formatArea, type LatLon } from '../../../utils/los/geo';
 import { batchSampleElevations } from '../../../utils/los/elevation';
 import { useLOSState, type PeakFinderParams, type PeakFinderResultData, type Peak } from '../../../contexts/LOSContext';
@@ -65,22 +66,19 @@ export default function PeakFinderPanel() {
       }, 'crosshair');
 
       // Handle double click on map to finish drawing
-      const handleDblClick = (mapEvent: any) => {
+      const handleDblClick = (mapEvent: maplibregl.MapMouseEvent) => {
         if (drawingModeRef.current) {
           mapEvent.preventDefault?.();
           setDrawingMode(false);
         }
       };
 
-      if (mapRef.current) {
-        mapRef.current.on('dblclick', handleDblClick);
-      }
+      const map = mapRef.current;
+      map?.on('dblclick', handleDblClick);
 
       return () => {
         setMapClickHandler(null);
-        if (mapRef.current) {
-          mapRef.current.off('dblclick', handleDblClick);
-        }
+        map?.off('dblclick', handleDblClick);
       };
     } else {
       setMapClickHandler(null);
@@ -95,7 +93,7 @@ export default function PeakFinderPanel() {
     if (polygonPoints.length < 3) return;
 
     if (estimatedPoints > MAX_POINTS_WARNING) {
-      const confirm = window.confirm(t('los.peakFinder.heavyCalculationConfirm', { count: estimatedPoints.toLocaleString() }));
+      const confirm = window.confirm(t('los.peakFinder.heavyCalculationConfirm', { formatted: estimatedPoints.toLocaleString() }));
       if (!confirm) return;
     }
 

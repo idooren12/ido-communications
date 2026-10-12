@@ -4,7 +4,7 @@
  * Supports: GeoTIFF, ASC (ESRI ASCII Grid), RES, IMG, HGT (SRTM)
  */
 
-import { TERRAIN_CONFIG } from './constants';
+import i18n from '../../i18n/config';
 
 // Types
 export interface DSMBounds {
@@ -166,11 +166,11 @@ export async function parseUploadedDSM(file: File): Promise<DSMParseResult> {
       case 'img':
         return await parseIMG(file);
       default:
-        return { success: false, error: `\u05E1\u05D5\u05D2 \u05E7\u05D5\u05D1\u05E5 \u05DC\u05D0 \u05E0\u05EA\u05DE\u05DA: ${ext}` };
+        return { success: false, error: i18n.t('los.dsm.errors.unsupportedFormat', { ext }) };
     }
   } catch (e) {
     console.error('DSM parse error:', e);
-    return { success: false, error: `\u05E9\u05D2\u05D9\u05D0\u05D4 \u05D1\u05E7\u05E8\u05D9\u05D0\u05EA \u05D4\u05E7\u05D5\u05D1\u05E5: ${(e as Error).message}` };
+    return { success: false, error: i18n.t('los.dsm.errors.readError', { message: (e as Error).message }) };
   }
 }
 
@@ -216,7 +216,7 @@ async function parseASCII(file: File): Promise<DSMParseResult> {
   const nodata = header['nodata_value'] ?? -9999;
 
   if (!ncols || !nrows || xllcorner === undefined || yllcorner === undefined || !cellsize) {
-    return { success: false, error: '\u05D7\u05E1\u05E8\u05D9\u05DD \u05E9\u05D3\u05D5\u05EA \u05D1\u05DB\u05D5\u05EA\u05E8\u05EA \u05E7\u05D5\u05D1\u05E5 ASC' };
+    return { success: false, error: i18n.t('los.dsm.errors.ascMissingHeader') };
   }
 
   // Parse data
@@ -289,7 +289,7 @@ async function parseRES(file: File): Promise<DSMParseResult> {
   let xll = 0, yll = 0;
   let cellsize = 0;
   let dataOffset = 0;
-  let nodata = -9999;
+  const nodata = -9999;
 
   // Try reading as header with ints at start
   try {
@@ -319,11 +319,11 @@ async function parseRES(file: File): Promise<DSMParseResult> {
         cellsize = 1; // Unknown
         dataOffset = 0;
       } else {
-        return { success: false, error: '\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05D6\u05D4\u05D5\u05EA \u05E4\u05D5\u05E8\u05DE\u05D8 \u05E7\u05D5\u05D1\u05E5 RES' };
+        return { success: false, error: i18n.t('los.dsm.errors.resUnknownFormat') };
       }
     }
-  } catch (e) {
-    return { success: false, error: '\u05E9\u05D2\u05D9\u05D0\u05D4 \u05D1\u05E7\u05E8\u05D9\u05D0\u05EA \u05DB\u05D5\u05EA\u05E8\u05EA RES' };
+  } catch {
+    return { success: false, error: i18n.t('los.dsm.errors.resHeaderError') };
   }
 
   // Read elevation data
@@ -394,13 +394,13 @@ async function parseHGT(file: File): Promise<DSMParseResult> {
     dim = 3601;
     cellsize = 1 / 3600; // 1 arc-second
   } else {
-    return { success: false, error: `\u05D2\u05D5\u05D3\u05DC \u05E7\u05D5\u05D1\u05E5 HGT \u05DC\u05D0 \u05EA\u05E7\u05D9\u05DF: ${size} values` };
+    return { success: false, error: i18n.t('los.dsm.errors.hgtInvalidSize', { size }) };
   }
 
   // Parse filename for coordinates
   const match = file.name.match(/([NS])(\d+)([EW])(\d+)/i);
   if (!match) {
-    return { success: false, error: '\u05DC\u05D0 \u05E0\u05D9\u05EA\u05DF \u05DC\u05D7\u05DC\u05E5 \u05E7\u05D5\u05D0\u05D5\u05E8\u05D3\u05D9\u05E0\u05D8\u05D5\u05EA \u05DE\u05E9\u05DD \u05D4\u05E7\u05D5\u05D1\u05E5' };
+    return { success: false, error: i18n.t('los.dsm.errors.hgtNoCoordinates') };
   }
 
   let lat = parseInt(match[2]);
@@ -482,17 +482,6 @@ function icsToWgs84(easting: number, northing: number): { lat: number; lon: numb
   const itmNorthing = northing + 500000; // Approximate shift
 
   return itmToWgs84(itmEasting, itmNorthing);
-}
-
-/**
- * Convert WGS84 to ICS (Old Israeli Grid)
- */
-function wgs84ToIcs(lat: number, lon: number): { east: number; north: number } {
-  const itm = wgs84ToItm(lat, lon);
-  return {
-    east: itm.east - 50000,
-    north: itm.north - 500000
-  };
 }
 
 /**
@@ -648,7 +637,7 @@ async function parseGeoTIFF(file: File): Promise<DSMParseResult> {
 
     const width = image.getWidth();
     const height = image.getHeight();
-    const [raster] = await image.readRasters();
+    const [raster] = (await image.readRasters()) as unknown as ArrayLike<number>[];
 
     // Get geospatial info
     const bbox = image.getBoundingBox(); // [west, south, east, north]
@@ -715,14 +704,12 @@ async function parseGeoTIFF(file: File): Promise<DSMParseResult> {
     // Get noData value - try async method first, then sync, then default
     let noData = -9999;
     try {
-      // Try to get GDAL metadata
-      const gdalNoData = image.getFileDirectory().GDAL_NODATA;
-      if (gdalNoData !== undefined) {
-        noData = parseFloat(gdalNoData);
+      const gdalNoData = image.getGDALNoData();
+      if (gdalNoData !== null && Number.isFinite(gdalNoData)) {
+        noData = gdalNoData;
       }
-    } catch (e) {
-      // If that fails, just use default
-      console.log('Using default noData value');
+    } catch {
+      // Keep the default noData value
     }
 
     // Convert to Float32Array
@@ -759,7 +746,7 @@ async function parseGeoTIFF(file: File): Promise<DSMParseResult> {
     console.error('GeoTIFF parse error:', e);
     return {
       success: false,
-      error: `\u05E9\u05D2\u05D9\u05D0\u05D4 \u05D1\u05E7\u05E8\u05D9\u05D0\u05EA GeoTIFF: ${(e as Error).message}`
+      error: i18n.t('los.dsm.errors.geotiffError', { message: (e as Error).message })
     };
   }
 }
@@ -767,35 +754,11 @@ async function parseGeoTIFF(file: File): Promise<DSMParseResult> {
 /**
  * Parse Erdas Imagine IMG format (basic)
  */
-async function parseIMG(file: File): Promise<DSMParseResult> {
+async function parseIMG(_file: File): Promise<DSMParseResult> {
   // IMG format is complex - recommend conversion
   return {
     success: false,
-    error: '\u05E4\u05D5\u05E8\u05DE\u05D8 IMG \u05DE\u05D5\u05E8\u05DB\u05D1. \u05DE\u05D5\u05DE\u05DC\u05E5 \u05DC\u05D4\u05DE\u05D9\u05E8 \u05DC-ASC \u05D0\u05D5 GeoTIFF \u05D1\u05D0\u05DE\u05E6\u05E2\u05D5\u05EA QGIS/GDAL.'
+    error: i18n.t('los.dsm.errors.imgUnsupported')
   };
 }
 
-// ============================================================================
-// Integration with elevation sampling
-// ============================================================================
-
-/**
- * Enhanced elevation sampling that checks custom layers first
- */
-export async function sampleElevationWithCustom(
-  lng: number,
-  lat: number,
-  zoom: number,
-  terrainUrl: string,
-  encoding: 'terrarium' | 'mapbox'
-): Promise<number | null> {
-  // Check custom layers first
-  const customElev = getCustomElevation(lat, lng);
-  if (customElev !== null) {
-    return customElev;
-  }
-
-  // Fall back to terrain tiles
-  // This would call the original sampleElevationAtLngLat
-  return null; // Let caller handle fallback
-}

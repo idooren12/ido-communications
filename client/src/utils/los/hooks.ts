@@ -1,71 +1,52 @@
 /**
- * Custom React hooks
+ * Custom React hooks for the LOS map
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { sampleElevationAtLngLat, type EncodingType } from './elevation';
 
 /**
- * Debounce a value
- */
-export function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState<T>(value);
-
-  useEffect(() => {
-    const handler = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(handler);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
-
-/**
- * Throttle a value
+ * Throttle a value: updates at most once per `delay` ms, always ending on the latest value.
  */
 export function useThrottle<T>(value: T, delay: number): T {
   const [throttledValue, setThrottledValue] = useState<T>(value);
   const lastUpdate = useRef<number>(0);
 
   useEffect(() => {
-    const now = Date.now();
-    if (now - lastUpdate.current >= delay) {
+    const wait = Math.max(0, delay - (Date.now() - lastUpdate.current));
+    const timeout = setTimeout(() => {
       setThrottledValue(value);
-      lastUpdate.current = now;
-    } else {
-      const timeout = setTimeout(() => {
-        setThrottledValue(value);
-        lastUpdate.current = Date.now();
-      }, delay - (now - lastUpdate.current));
-      return () => clearTimeout(timeout);
-    }
+      lastUpdate.current = Date.now();
+    }, wait);
+    return () => clearTimeout(timeout);
   }, [value, delay]);
 
   return throttledValue;
 }
 
+function detectMobile(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hasTouchScreen = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  return hasTouchScreen && window.innerWidth < 768;
+}
+
 /**
- * Detect mobile device
+ * Detect a small touch device (updates on resize).
  */
 export function useIsMobile(): boolean {
-  const [isMobile, setIsMobile] = useState(false);
+  const [isMobile, setIsMobile] = useState(detectMobile);
 
   useEffect(() => {
-    const check = () => {
-      const hasTouchScreen = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      const isSmallScreen = window.innerWidth < 768;
-      setIsMobile(hasTouchScreen && isSmallScreen);
-    };
-
-    check();
-    window.addEventListener('resize', check);
-    return () => window.removeEventListener('resize', check);
+    const onResize = () => setIsMobile(detectMobile());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   return isMobile;
 }
 
 /**
- * Get elevation at a position with throttling and fallback
+ * Get elevation at a position with throttling and fallback to coarser zoom levels.
  */
 export function useElevation(
   position: { lng: number; lat: number } | null,
@@ -73,109 +54,38 @@ export function useElevation(
   tilesUrl: string,
   encoding: EncodingType
 ) {
-  const [elevation, setElevation] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-
   const throttledPosition = useThrottle(position, 150);
+  const baseZoom = Math.min(Math.max(Math.round(zoom), 2), 14);
+  const requestKey = throttledPosition
+    ? `${throttledPosition.lng},${throttledPosition.lat},${baseZoom},${tilesUrl},${encoding}`
+    : null;
+
+  // The last answered request; "loading" is derived from whether it matches the current one.
+  const [answer, setAnswer] = useState<{ key: string; elevation: number | null } | null>(null);
 
   useEffect(() => {
-    if (!throttledPosition) {
-      setElevation(null);
-      return;
-    }
-
+    if (!throttledPosition || !requestKey) return;
     let cancelled = false;
-    setLoading(true);
 
-    // Use zoom level appropriate for the view, with wider range
-    const baseZoom = Math.min(Math.max(Math.round(zoom), 2), 14);
-
-    // Try to get elevation with fallback to lower zoom levels
     const tryGetElevation = async (tryZoom: number): Promise<number | null> => {
       if (tryZoom < 2) return null;
-
-      const result = await sampleElevationAtLngLat(
-        throttledPosition.lng,
-        throttledPosition.lat,
-        tryZoom,
-        tilesUrl,
-        encoding
-      );
-
-      // If failed and we can try lower zoom, do it
-      if (result === null && tryZoom > 2) {
-        return tryGetElevation(tryZoom - 2);
-      }
-
+      const result = await sampleElevationAtLngLat(throttledPosition.lng, throttledPosition.lat, tryZoom, tilesUrl, encoding);
+      if (result === null && tryZoom > 2) return tryGetElevation(tryZoom - 2);
       return result;
     };
 
-    tryGetElevation(baseZoom).then((elev) => {
-      if (!cancelled) {
-        setElevation(elev);
-        setLoading(false);
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setElevation(null);
-        setLoading(false);
-      }
-    });
+    tryGetElevation(baseZoom)
+      .catch(() => null)
+      .then(elevation => {
+        if (!cancelled) setAnswer({ key: requestKey, elevation });
+      });
 
     return () => { cancelled = true; };
-  }, [throttledPosition, zoom, tilesUrl, encoding]);
+  }, [throttledPosition, requestKey, baseZoom, tilesUrl, encoding]);
 
-  return { elevation, loading };
-}
-
-/**
- * Local storage hook with SSR safety
- */
-export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T) => void] {
-  const [storedValue, setStoredValue] = useState<T>(initialValue);
-
-  useEffect(() => {
-    try {
-      const item = window.localStorage.getItem(key);
-      if (item) {
-        setStoredValue(JSON.parse(item));
-      }
-    } catch (error) {
-      console.error('Error reading localStorage:', error);
-    }
-  }, [key]);
-
-  const setValue = useCallback((value: T) => {
-    try {
-      setStoredValue(value);
-      window.localStorage.setItem(key, JSON.stringify(value));
-    } catch (error) {
-      console.error('Error writing localStorage:', error);
-    }
-  }, [key]);
-
-  return [storedValue, setValue];
-}
-
-/**
- * Previous value hook
- */
-export function usePrevious<T>(value: T): T | undefined {
-  const ref = useRef<T>();
-  useEffect(() => { ref.current = value; }, [value]);
-  return ref.current;
-}
-
-/**
- * Mounted state hook
- */
-export function useIsMounted(): () => boolean {
-  const mountedRef = useRef(false);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  return useCallback(() => mountedRef.current, []);
+  if (!requestKey) return { elevation: null, loading: false };
+  return {
+    elevation: answer?.elevation ?? null,
+    loading: answer?.key !== requestKey,
+  };
 }

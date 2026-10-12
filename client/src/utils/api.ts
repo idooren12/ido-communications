@@ -46,9 +46,9 @@ export function apiErrorKey(err: unknown): string {
   return 'errors.serverError';
 }
 
-async function handleResponse(res: Response) {
+async function handleResponse<T>(res: Response): Promise<T> {
   const contentType = res.headers.get('content-type') || '';
-  let data: { error?: string } & Record<string, unknown> = {};
+  let data: { error?: string } = {};
 
   if (contentType.includes('application/json')) {
     try {
@@ -68,8 +68,38 @@ async function handleResponse(res: Response) {
     throw new ApiError('SERVER_UNAVAILABLE', res.status);
   }
 
-  return data;
+  return data as T;
 }
+
+// Response shapes
+export interface ApiUser {
+  id: string;
+  username: string;
+  preferredLanguage: string;
+  createdAt: string;
+}
+
+export interface ApiAntenna {
+  id: string;
+  name: string;
+  powerWatts: number;
+  gainDbi: number;
+  frequencyMhz?: number | null;
+  notes?: string | null;
+}
+
+export interface ApiWeather {
+  temperature: number;
+  humidity: number;
+  windSpeed: number;
+  rainMmH: number;
+  visibility: number;
+  description: string;
+  icon: string;
+}
+
+type AuthResponse = { user: ApiUser; token: string };
+type Success = { success: boolean };
 
 // Auth
 export async function apiRegister(username: string, password: string) {
@@ -78,7 +108,7 @@ export async function apiRegister(username: string, password: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password })
   });
-  return handleResponse(res);
+  return handleResponse<AuthResponse>(res);
 }
 
 export async function apiLogin(username: string, password: string) {
@@ -87,12 +117,12 @@ export async function apiLogin(username: string, password: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password })
   });
-  return handleResponse(res);
+  return handleResponse<AuthResponse>(res);
 }
 
 export async function apiGetMe() {
   const res = await fetch(`${API_BASE}/auth/me`, { headers: getHeaders() });
-  return handleResponse(res);
+  return handleResponse<{ user: ApiUser }>(res);
 }
 
 export async function apiUpdatePreferences(preferredLanguage: string) {
@@ -101,7 +131,7 @@ export async function apiUpdatePreferences(preferredLanguage: string) {
     headers: getHeaders(),
     body: JSON.stringify({ preferredLanguage })
   });
-  return handleResponse(res);
+  return handleResponse<{ user: ApiUser }>(res);
 }
 
 export async function apiChangePassword(currentPassword: string, newPassword: string) {
@@ -110,13 +140,13 @@ export async function apiChangePassword(currentPassword: string, newPassword: st
     headers: getHeaders(),
     body: JSON.stringify({ currentPassword, newPassword })
   });
-  return handleResponse(res);
+  return handleResponse<Success>(res);
 }
 
 // Antennas
 export async function apiGetAntennas() {
   const res = await fetch(`${API_BASE}/antennas`, { headers: getHeaders() });
-  return handleResponse(res);
+  return handleResponse<{ antennas: ApiAntenna[] }>(res);
 }
 
 export async function apiCreateAntenna(name: string, powerWatts: number, gainDbi: number, frequencyMhz?: number, notes?: string) {
@@ -125,7 +155,7 @@ export async function apiCreateAntenna(name: string, powerWatts: number, gainDbi
     headers: getHeaders(),
     body: JSON.stringify({ name, powerWatts, gainDbi, frequencyMhz, notes })
   });
-  return handleResponse(res);
+  return handleResponse<{ antenna: ApiAntenna }>(res);
 }
 
 export async function apiUpdateAntenna(id: string, data: { name?: string; powerWatts?: number; gainDbi?: number; frequencyMhz?: number | null; notes?: string | null }) {
@@ -134,7 +164,7 @@ export async function apiUpdateAntenna(id: string, data: { name?: string; powerW
     headers: getHeaders(),
     body: JSON.stringify(data)
   });
-  return handleResponse(res);
+  return handleResponse<{ antenna: ApiAntenna }>(res);
 }
 
 export async function apiDeleteAntenna(id: string) {
@@ -142,7 +172,7 @@ export async function apiDeleteAntenna(id: string) {
     method: 'DELETE',
     headers: getHeaders()
   });
-  return handleResponse(res);
+  return handleResponse<Success>(res);
 }
 
 // History
@@ -161,7 +191,7 @@ export interface CalculationRecord {
 
 export async function apiGetHistory() {
   const res = await fetch(`${API_BASE}/history`, { headers: getHeaders() });
-  return handleResponse(res);
+  return handleResponse<{ calculations: CalculationRecord[] }>(res);
 }
 
 export async function apiSaveCalculation(data: {
@@ -179,7 +209,7 @@ export async function apiSaveCalculation(data: {
     headers: getHeaders(),
     body: JSON.stringify(data)
   });
-  return handleResponse(res);
+  return handleResponse<{ calculation: CalculationRecord }>(res);
 }
 
 export async function apiDeleteCalculation(id: string) {
@@ -187,7 +217,7 @@ export async function apiDeleteCalculation(id: string) {
     method: 'DELETE',
     headers: getHeaders()
   });
-  return handleResponse(res);
+  return handleResponse<Success>(res);
 }
 
 export async function apiClearHistory() {
@@ -195,11 +225,11 @@ export async function apiClearHistory() {
     method: 'DELETE',
     headers: getHeaders()
   });
-  return handleResponse(res);
+  return handleResponse<Success>(res);
 }
 
 // Weather (public endpoint — no auth required)
 export async function apiGetWeather(lat: number, lon: number) {
   const res = await fetch(`${API_BASE}/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
-  return handleResponse(res);
+  return handleResponse<ApiWeather>(res);
 }

@@ -50,7 +50,7 @@ export default function ToolSidebar() {
         const parsed = parseInt(saved, 10);
         if (!isNaN(parsed)) return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, parsed));
       }
-    } catch {}
+    } catch { /* storage unavailable */ }
     return SIDEBAR_DEFAULT_WIDTH;
   });
   const isDragging = useRef(false);
@@ -60,7 +60,7 @@ export default function ToolSidebar() {
     try {
       const saved = localStorage.getItem(LS_MOBILE_HEIGHT_KEY);
       if (saved) return parseInt(saved, 10) || 0;
-    } catch {}
+    } catch { /* storage unavailable */ }
     return 0; // 0 = use CSS default (transform-based)
   });
   const touchStartY = useRef(0);
@@ -86,7 +86,7 @@ export default function ToolSidebar() {
       setMobileHeight(0);
       setActivePanel(null);
     } else {
-      try { localStorage.setItem(LS_MOBILE_HEIGHT_KEY, String(mobileHeight)); } catch {}
+      try { localStorage.setItem(LS_MOBILE_HEIGHT_KEY, String(mobileHeight)); } catch { /* storage unavailable */ }
     }
   }, [mobileHeight, setActivePanel]);
 
@@ -114,7 +114,7 @@ export default function ToolSidebar() {
       document.removeEventListener('mouseup', onMouseUp);
       // Save final width
       setSidebarWidth(w => {
-        try { localStorage.setItem(LS_WIDTH_KEY, String(w)); } catch {}
+        try { localStorage.setItem(LS_WIDTH_KEY, String(w)); } catch { /* storage unavailable */ }
         return w;
       });
     };

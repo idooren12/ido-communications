@@ -3,7 +3,9 @@
  * Manages a pool of Web Workers for parallel calculations
  */
 
-export interface WorkerTask<T = any, R = any> {
+import type { LOSResult } from '../los';
+
+export interface WorkerTask<T = unknown, R = unknown> {
   id: string;
   type: string;
   payload: T;
@@ -232,8 +234,8 @@ async function calculateLOS(task) {
   // Validation
   const warnings = [];
   const errors = [];
-  if (totalDistance > 200000) warnings.push('\u05DE\u05E8\u05D7\u05E7 \u05D2\u05D3\u05D5\u05DC \u05DE-200 \u05E7"\u05DE');
-  if (dataCompleteness < 0.5) warnings.push('\u05E0\u05EA\u05D5\u05E0\u05D9\u05DD \u05D7\u05DC\u05E7\u05D9\u05D9\u05DD (' + Math.round(dataCompleteness * 100) + '%)');
+  if (totalDistance > 200000) warnings.push('Distance over 200 km');
+  if (dataCompleteness < 0.5) warnings.push('Partial elevation data (' + Math.round(dataCompleteness * 100) + '%)');
   const validation = { valid: errors.length === 0, warnings, errors };
 
   const clear = obstruction === undefined && (minClearance === null || minClearance >= 0);
@@ -415,7 +417,8 @@ export class WorkerPool {
         id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         type, payload, resolve, reject, onProgress,
       };
-      this.taskQueue.push(task);
+      // The queue holds tasks of every payload/result type.
+      this.taskQueue.push(task as unknown as WorkerTask);
       this.processQueue();
     });
   }
@@ -424,7 +427,7 @@ export class WorkerPool {
     // Lazy import to avoid circular dependency
     const { calculateLOS } = await import('../los');
     if (type === 'calculateLOS') {
-      const { pointA, pointB, options } = payload as any;
+      const { pointA, pointB, options } = payload as unknown as LOSTaskPayload;
       const result = await calculateLOS(pointA, pointB, undefined, options);
       return result as unknown as R;
     }
@@ -486,23 +489,23 @@ export function getLOSWorkerPool(): WorkerPool {
   return losWorkerPool;
 }
 
+type LOSTaskPoint = { lat: number; lon: number; antennaHeight: number };
+type LOSTaskOptions = { frequencyMHz?: number; refractionK?: number; sampleStepMeters?: number };
+type LOSTaskPayload = { pointA: LOSTaskPoint; pointB: LOSTaskPoint; options?: LOSTaskOptions };
+
 export async function calculateLOSAsync(
-  pointA: { lat: number; lon: number; antennaHeight: number },
-  pointB: { lat: number; lon: number; antennaHeight: number },
-  options?: { frequencyMHz?: number; refractionK?: number; sampleStepMeters?: number }
-): Promise<any> {
+  pointA: LOSTaskPoint,
+  pointB: LOSTaskPoint,
+  options?: LOSTaskOptions
+): Promise<LOSResult> {
   const pool = getLOSWorkerPool();
-  return pool.execute('calculateLOS', { pointA, pointB, options });
+  return pool.execute<LOSTaskPayload, LOSResult>('calculateLOS', { pointA, pointB, options });
 }
 
 export async function calculateBatchLOSAsync(
-  tasks: Array<{
-    pointA: { lat: number; lon: number; antennaHeight: number };
-    pointB: { lat: number; lon: number; antennaHeight: number };
-    options?: any;
-  }>,
+  tasks: LOSTaskPayload[],
   onProgress?: (completed: number, total: number) => void
-): Promise<any[]> {
+): Promise<LOSResult[]> {
   const pool = getLOSWorkerPool();
-  return pool.executeAll('calculateLOS', tasks, onProgress);
+  return pool.executeAll<LOSTaskPayload, LOSResult>('calculateLOS', tasks, onProgress);
 }

@@ -1,7 +1,8 @@
 
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
+import type * as GeoJSON from 'geojson';
 import { ISRAEL_CENTER, ISRAEL_DEFAULT_ZOOM, ELEVATION_RANGES, TERRAIN_CONFIG, BASEMAP_SOURCES } from '../../utils/los/constants';
 import { haversineDistance, initialBearing, sphericalPolygonArea, formatDistance, formatArea, destinationPoint, metersToDegreesLat, metersToDegreesLon, pointInPolygon, type LatLon } from '../../utils/los/geo';
 import { useIsMobile, useElevation } from '../../utils/los/hooks';
@@ -12,13 +13,14 @@ import { gridToImageUrl } from '../../utils/los/losAreaRaster';
 import type { GeocodingResult } from '../../utils/los/geocoding';
 import ElevationLegend from './ElevationLegend';
 import styles from './UnifiedMap.module.css';
+import { searchResultPopup, peakPopup, losLinePointPopup, losAreaOriginPopup } from './mapPopups';
 
 type MeasureMode = 'none' | 'distance' | 'area';
 type ScaleMode = 'fixed' | 'viewport';
 
 export default function UnifiedMap() {
   const { t } = useTranslation();
-  const { state, mapRef, updateMapState, getVisibleResults, mapClickHandler, setMapClickHandler, previewPoints, setPreviewPoints, previewPolygon, setPreviewPolygon, previewLine, previewSector, previewPeaks, previewGridCells, previewRasterResult, removeResult, previewDragHandler, editResultInPanel } = useLOSState();
+  const { state, mapRef, updateMapState, getVisibleResults, mapClickHandler, setMapClickHandler, previewPoints, previewPolygon, setPreviewPolygon, previewLine, previewSector, previewPeaks, previewGridCells, previewRasterResult, removeResult, previewDragHandler, editResultInPanel } = useLOSState();
   const mapContainer = useRef<HTMLDivElement>(null);
   const searchMarkerRef = useRef<{ marker: maplibregl.Marker; popup: maplibregl.Popup } | null>(null);
   const resultMarkersRef = useRef<Map<string, maplibregl.Marker[]>>(new Map());
@@ -89,10 +91,10 @@ export default function UnifiedMap() {
     }
     try {
       const params = new URLSearchParams({ q: query, format: 'json', limit: '5', countrycodes: 'il', viewbox: '34.0,29.0,36.0,34.0', bounded: '1', 'accept-language': 'he,en' });
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, { headers: { 'User-Agent': 'IsraelElevationMap/5.0' } });
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
       if (response.ok) {
         const results = await response.json();
-        setSearchResults(results.map((r: any) => ({ lat: parseFloat(r.lat), lon: parseFloat(r.lon), displayName: r.display_name, type: 'place' })));
+        setSearchResults((results as Array<{ lat: string; lon: string; display_name: string }>).map(r => ({ lat: parseFloat(r.lat), lon: parseFloat(r.lon), displayName: r.display_name, type: 'place' })));
         setShowSearchResults(true);
       }
     } catch (e) { console.error('Search error:', e); }
@@ -106,7 +108,7 @@ export default function UnifiedMap() {
     if (searchMarkerRef.current) { searchMarkerRef.current.marker.remove(); searchMarkerRef.current.popup.remove(); }
     const elev = await sampleElevationAtLngLat(result.lon, result.lat, 12, TERRAIN_CONFIG.url, TERRAIN_CONFIG.encoding);
     const el = document.createElement('div'); el.className = styles.searchMarker;
-    const popup = new maplibregl.Popup({ offset: 25 }).setHTML(`<div style="direction:rtl;padding:4px;"><div style="font-weight:600;">${result.displayName.split(',').slice(0,2).join(', ')}</div><div style="font-size:12px;color:#888;">${result.lat.toFixed(5)}, ${result.lon.toFixed(5)}<br/><span style="color:#22d3ee;">גובה: ${elev !== null ? Math.round(elev) + " מ'" : 'לא זמין'}</span></div></div>`);
+    const popup = new maplibregl.Popup({ offset: 25 }).setHTML(searchResultPopup(result.displayName, result.lat, result.lon, elev));
     const marker = new maplibregl.Marker({ element: el }).setLngLat([result.lon, result.lat]).setPopup(popup).addTo(mapRef.current);
     popup.addTo(mapRef.current);
     searchMarkerRef.current = { marker, popup };
@@ -118,7 +120,7 @@ export default function UnifiedMap() {
     try {
       const dsmModule = await import('../../utils/los/customDSM');
       const layers = dsmModule.getCustomLayers();
-      const features = layers.map((layer: any) => ({
+      const features = layers.map(layer => ({
         type: 'Feature' as const,
         properties: { name: layer.name },
         geometry: {
@@ -136,7 +138,7 @@ export default function UnifiedMap() {
       if (source) {
         source.setData({ type: 'FeatureCollection', features });
       }
-    } catch (e) { /* DSM module not available */ }
+    } catch { /* DSM module not available */ }
   }, []);
 
   // Initialize map - ONLY ONCE
@@ -277,15 +279,17 @@ export default function UnifiedMap() {
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
     const v = elevationTintVisible ? 'visible' : 'none';
-    mapRef.current.getLayer('elevation-tint-layer') && mapRef.current.setLayoutProperty('elevation-tint-layer', 'visibility', v);
-    mapRef.current.getLayer('elevation-tint-layer') && mapRef.current.setPaintProperty('elevation-tint-layer', 'raster-opacity', elevationOpacity);
-    mapRef.current.getLayer('hillshade-layer') && mapRef.current.setLayoutProperty('hillshade-layer', 'visibility', v);
+    if (mapRef.current.getLayer('elevation-tint-layer')) {
+      mapRef.current.setLayoutProperty('elevation-tint-layer', 'visibility', v);
+      mapRef.current.setPaintProperty('elevation-tint-layer', 'raster-opacity', elevationOpacity);
+    }
+    if (mapRef.current.getLayer('hillshade-layer')) mapRef.current.setLayoutProperty('hillshade-layer', 'visibility', v);
   }, [elevationTintVisible, elevationOpacity, mapLoaded, mapRef]);
 
   // Update boundaries visibility
   useEffect(() => {
     if (!mapRef.current || !mapLoaded) return;
-    mapRef.current.getLayer('boundaries-layer') && mapRef.current.setLayoutProperty('boundaries-layer', 'visibility', showBoundaries ? 'visible' : 'none');
+    if (mapRef.current.getLayer('boundaries-layer')) mapRef.current.setLayoutProperty('boundaries-layer', 'visibility', showBoundaries ? 'visible' : 'none');
   }, [showBoundaries, mapLoaded, mapRef]);
 
   // Update scale mode
@@ -337,7 +341,7 @@ export default function UnifiedMap() {
       }
     }, 'crosshair');
 
-    const handleDblClick = (mapEvent: any) => {
+    const handleDblClick = (mapEvent: maplibregl.MapMouseEvent) => {
       if (elevPolygonDrawingRef.current) {
         mapEvent.preventDefault?.();
         setElevPolygonDrawing(false);
@@ -425,7 +429,7 @@ export default function UnifiedMap() {
           if (source && typeof source.setTiles === 'function') {
             source.setTiles([getTintTilesTemplate()]);
           }
-        } catch (e) { /* ignore */ }
+        } catch { /* ignore */ }
 
         setScaleMode('fixed'); // Switch to fixed to prevent viewport overwriting
       }
@@ -622,15 +626,7 @@ export default function UnifiedMap() {
       el.innerHTML = `<span class="${styles.peakRank}">${peak.rank}</span>`;
       el.style.backgroundColor = '#f59e0b';
 
-      const popup = new maplibregl.Popup({ offset: 25 }).setHTML(
-        `<div style="direction:rtl;padding:4px;">
-          <div style="font-weight:600;">פסגה #${peak.rank}</div>
-          <div style="font-size:12px;color:#888;">
-            ${peak.lat.toFixed(5)}, ${peak.lon.toFixed(5)}<br/>
-            <span style="color:#22d3ee;">גובה: ${Math.round(peak.elevation)} מ'</span>
-          </div>
-        </div>`
-      );
+      const popup = new maplibregl.Popup({ offset: 25 }).setHTML(peakPopup(peak.rank, peak.lat, peak.lon, peak.elevation));
 
       const marker = new maplibregl.Marker({ element: el })
         .setLngLat([peak.lon, peak.lat])
@@ -639,7 +635,7 @@ export default function UnifiedMap() {
       previewMarkersRef.current.push(marker);
     });
 
-  }, [previewPoints, previewLine, previewPolygon, previewSector, previewPeaks, mapLoaded, mapRef]);
+  }, [previewPoints, previewLine, previewPolygon, previewSector, previewPeaks, mapLoaded, mapRef, previewDragHandler]);
 
   // Update results layers from context
   useEffect(() => {
@@ -697,12 +693,12 @@ export default function UnifiedMap() {
       if (rasterUrl && rasterCoords) {
         const existingSource = mapRef.current!.getSource(sourceId) as maplibregl.ImageSource;
         if (existingSource) {
-          existingSource.updateImage({ url: rasterUrl, coordinates: rasterCoords as any });
+          existingSource.updateImage({ url: rasterUrl, coordinates: rasterCoords as maplibregl.Coordinates });
         } else {
           mapRef.current!.addSource(sourceId, {
             type: 'image',
             url: rasterUrl,
-            coordinates: rasterCoords as any,
+            coordinates: rasterCoords as maplibregl.Coordinates,
           });
           // Insert before boundary layer so boundary lines draw on top
           const beforeLayer = mapRef.current!.getLayer('results-los-area-boundary-line') ? 'results-los-area-boundary-line' : undefined;
@@ -856,15 +852,7 @@ export default function UnifiedMap() {
         el.innerHTML = `<span class="${styles.peakRank}">${peak.rank}</span>`;
         el.style.backgroundColor = r.color;
 
-        const popup = new maplibregl.Popup({ offset: 25 }).setHTML(
-          `<div style="direction:rtl;padding:4px;">
-            <div style="font-weight:600;">פסגה #${peak.rank}</div>
-            <div style="font-size:12px;color:#888;">
-              ${peak.lat.toFixed(5)}, ${peak.lon.toFixed(5)}<br/>
-              <span style="color:#22d3ee;">גובה: ${Math.round(peak.elevation)} מ'</span>
-            </div>
-          </div>`
-        );
+        const popup = new maplibregl.Popup({ offset: 25 }).setHTML(peakPopup(peak.rank, peak.lat, peak.lon, peak.elevation));
 
         const marker = new maplibregl.Marker({ element: el })
           .setLngLat([peak.lon, peak.lat])
@@ -878,34 +866,14 @@ export default function UnifiedMap() {
     // LOS Line markers — simple dots with popups
     visibleResults.filter(isLOSLineResult).forEach(r => {
       const markers: maplibregl.Marker[] = [];
-      const modeText = r.params.mode === 'optical' ? 'אופטי' : 'RF';
-      const resultText = r.result.clear ? '✓ קו ראייה פתוח' : '✕ קו ראייה חסום';
-      const resultColor = r.result.clear ? '#10b981' : '#f43f5e';
-
-      const buildPointPopup = (label: string, point: 'A' | 'B', lat: number, lon: number, height: number) => `
-        <div style="direction:rtl;padding:8px;min-width:180px;">
-          <div style="font-weight:600;font-size:13px;color:white;margin-bottom:6px;">נקודה ${label}</div>
-          <div style="font-size:11px;color:#aaa;line-height:1.6;">
-            <div>קו רוחב: <span style="color:white;font-family:monospace;">${lat.toFixed(6)}</span></div>
-            <div>קו אורך: <span style="color:white;font-family:monospace;">${lon.toFixed(6)}</span></div>
-            <div>גובה: <span style="color:white;">${height} מ'</span></div>
-          </div>
-          <hr style="border-color:#333;margin:8px 0;" />
-          <div style="font-size:11px;color:#aaa;">
-            <div>מצב: ${modeText}${r.params.rfFrequency ? ` (${r.params.rfFrequency})` : ''}</div>
-            <div style="color:${resultColor};">${resultText}</div>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px;">
-            <button data-action="edit" data-result-id="${r.id}"
-              style="flex:1;padding:6px;background:#22d3ee;color:#0a0a0c;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">
-              שנה
-            </button>
-            <button data-action="delete" data-result-id="${r.id}"
-              style="padding:6px 10px;background:rgba(244,63,94,0.15);color:#f43f5e;border:1px solid rgba(244,63,94,0.3);border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">
-              מחק
-            </button>
-          </div>
-        </div>`;
+      const buildPointPopup = (label: string, lat: number, lon: number, height: number) =>
+        losLinePointPopup({
+          label, lat, lon, height,
+          mode: r.params.mode,
+          rfFrequency: r.params.rfFrequency,
+          clear: r.result.clear,
+          resultId: r.id,
+        });
 
       // Point A — labeled dot
       const elA = document.createElement('div');
@@ -913,7 +881,7 @@ export default function UnifiedMap() {
       elA.style.backgroundColor = r.color;
       elA.textContent = 'A';
       const popupA = new maplibregl.Popup({ offset: 25, closeButton: true }).setHTML(
-        buildPointPopup('A', 'A', r.params.pointA.lat, r.params.pointA.lon, r.params.pointA.height)
+        buildPointPopup('A', r.params.pointA.lat, r.params.pointA.lon, r.params.pointA.height)
       );
       const origPosA: [number, number] = [r.params.pointA.lon, r.params.pointA.lat];
       const markerA = new maplibregl.Marker({ element: elA, draggable: true, anchor: 'center' })
@@ -932,7 +900,7 @@ export default function UnifiedMap() {
       elB.style.backgroundColor = r.color;
       elB.textContent = 'B';
       const popupB = new maplibregl.Popup({ offset: 25, closeButton: true }).setHTML(
-        buildPointPopup('B', 'B', r.params.pointB.lat, r.params.pointB.lon, r.params.pointB.height)
+        buildPointPopup('B', r.params.pointB.lat, r.params.pointB.lon, r.params.pointB.height)
       );
       const origPosB: [number, number] = [r.params.pointB.lon, r.params.pointB.lat];
       const markerB = new maplibregl.Marker({ element: elB, draggable: true, anchor: 'center' })
@@ -958,32 +926,14 @@ export default function UnifiedMap() {
       el.style.backgroundColor = r.color;
 
       const popup = new maplibregl.Popup({ offset: 25, closeButton: true }).setHTML(
-        `<div style="direction:rtl;padding:8px;min-width:180px;">
-          <div style="font-weight:600;font-size:13px;color:white;margin-bottom:6px;">נקודת מקור</div>
-          <div style="font-size:11px;color:#aaa;line-height:1.6;">
-            <div>קו רוחב: <span style="color:white;font-family:monospace;">${origin.lat.toFixed(6)}</span></div>
-            <div>קו אורך: <span style="color:white;font-family:monospace;">${origin.lon.toFixed(6)}</span></div>
-            <div>גובה: <span style="color:white;">${origin.height} מ'</span></div>
-          </div>
-          <hr style="border-color:#333;margin:8px 0;" />
-          <div style="font-size:11px;color:#aaa;line-height:1.6;">
-            <div>גובה יעד: ${targetHeight} מ'</div>
-            <div>טווח: ${minDistance}-${maxDistance} מ'</div>
-            <div>אזימוט: ${minAzimuth}°-${maxAzimuth}°</div>
-            <div>רזולוציה: ${resolution} מ'</div>
-            <div>מצב: ${mode === 'optical' ? 'אופטי' : 'RF'}${r.params.rfFrequency ? ` (${r.params.rfFrequency})` : ''}</div>
-          </div>
-          <div style="display:flex;gap:6px;margin-top:8px;">
-            <button data-action="edit" data-result-id="${r.id}"
-              style="flex:1;padding:6px;background:#22d3ee;color:#0a0a0c;border:none;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">
-              שנה
-            </button>
-            <button data-action="delete" data-result-id="${r.id}"
-              style="padding:6px 10px;background:rgba(244,63,94,0.15);color:#f43f5e;border:1px solid rgba(244,63,94,0.3);border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">
-              מחק
-            </button>
-          </div>
-        </div>`
+        losAreaOriginPopup({
+          lat: origin.lat,
+          lon: origin.lon,
+          height: origin.height,
+          targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, mode,
+          rfFrequency: r.params.rfFrequency,
+          resultId: r.id,
+        })
       );
 
       const origPosOrigin: [number, number] = [origin.lon, origin.lat];
@@ -1000,7 +950,7 @@ export default function UnifiedMap() {
       resultMarkersRef.current.set(`${r.id}-origin`, markers);
     });
 
-  }, [state.results, mapLoaded, mapRef, getVisibleResults]);
+  }, [state.results, mapLoaded, mapRef, getVisibleResults, editResultInPanel]);
 
   // Update preview grid cells (for LOS Area calculation preview) - raster image
   // Handles both streaming (previewRasterResult) and legacy (previewGridCells) paths
@@ -1041,12 +991,12 @@ export default function UnifiedMap() {
 
     const existingSource = mapRef.current.getSource(sourceId) as maplibregl.ImageSource;
     if (existingSource) {
-      existingSource.updateImage({ url: rasterUrl, coordinates: rasterCoords as any });
+      existingSource.updateImage({ url: rasterUrl, coordinates: rasterCoords as maplibregl.Coordinates });
     } else {
       mapRef.current.addSource(sourceId, {
         type: 'image',
         url: rasterUrl,
-        coordinates: rasterCoords as any,
+        coordinates: rasterCoords as maplibregl.Coordinates,
       });
       mapRef.current.addLayer({
         id: layerId,
