@@ -137,7 +137,10 @@
     "passwordMismatch": "Passwords do not match",
     "serverError": "Server error, please try again",
     "calculationError": "Cannot perform calculation with the provided data",
-    "fillRequiredFields": "Please fill in all required fields"
+    "fillRequiredFields": "Please fill in all required fields",
+    "serverUnavailable": "The server is not responding. It may be waking up — try again in a minute.",
+    "tooManyAttempts": "Too many attempts. Please wait a few minutes and try again.",
+    "passwordTooLong": "Password must be at most 72 characters"
   },
   "footer": {
     "copyright": "RF tools © {{year}}"
@@ -155,9 +158,9 @@
     "distance": "Distance",
     "power": "Power",
     "frequency": "Frequency",
-    "km": "Kilometers",
+    "km": "km",
     "mi": "Miles",
-    "m": "Meters",
+    "m": "m",
     "ft": "Feet",
     "nmi": "Nautical miles",
     "W": "Watt",
@@ -167,7 +170,10 @@
     "Hz": "Hertz",
     "kHz": "Kilohertz",
     "MHz": "Megahertz",
-    "GHz": "Gigahertz"
+    "GHz": "Gigahertz",
+    "m2": "m²",
+    "dunam": "dunam",
+    "km2": "km²"
   },
   "pdf": {
     "export": "Export to PDF",
@@ -230,7 +236,14 @@
     "note1": "This is a minimum theoretical distance under ideal conditions",
     "note2": "In practice, adding a safety margin is recommended",
     "note3": "Calculation assumes continuous transmission (100% duty cycle)",
-    "note4": "Consult a qualified professional before installation"
+    "note4": "Consult a qualified professional before installation",
+    "outOfRange": "ICNIRP reference levels cover {{min}}–{{max}} MHz. Enter a frequency in that range or set the power density manually.",
+    "hfApproximate": "Below 30 MHz ICNIRP 2020 sets electric/magnetic field limits, not a power density. The 30 MHz power density is used here (conservative), and at these frequencies the safe distance is often in the near field, where this formula is not accurate. Measure or use a near-field method.",
+    "nearField": "The result is closer than one wavelength to the antenna (near field). The far-field formula is not reliable there; treat the result as indicative only and measure on site.",
+    "groundReflection": "Include ground reflection (×{{factor}}, FCC OET-65)",
+    "groundReflectionHint": "Recommended. A ray reflected from the ground can add to the direct one and raise power density up to 2.56×, which increases the safe distance by 1.6×.",
+    "reflectionFactor": "Reflection factor",
+    "optional": "optional, used for the near-field check"
   },
   "profile": {
     "title": "My Profile",
@@ -278,7 +291,8 @@
       "realisticPower": "Realistic Power",
       "freeSpacePower": "Free-Space Power (theoretical)",
       "reduction": "Reduction",
-      "inRegion": "in region"
+      "inRegion": "in region",
+      "modelNote": "Estimate for planning. Rain (ITU-R P.838), fog (P.840) and water vapour (P.676) follow ITU-R models; vegetation, urban clutter, terrain and dust are simplified regional approximations. Verify critical links with a field test."
     },
     "lossBreakdown": {
       "title": "Loss Breakdown",
@@ -405,7 +419,10 @@
       "swap": "Swap points",
       "saveResult": "Save result",
       "elevationProfile": "Elevation profile",
-      "profile": "Profile"
+      "profile": "Profile",
+      "losLine": "LOS line",
+      "fresnelBlocked": "Line of sight is clear, but the Fresnel zone is partially blocked",
+      "minClearance": "Minimum clearance"
     },
     "losArea": {
       "title": "Area Calculation",
@@ -453,12 +470,15 @@
       "azimuthRange": "Azimuth range",
       "estimatedPoints": "Estimated points",
       "tooManyPoints": "Too many points: {{count}} (max: {{max}})",
-      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?",
+      "heavyCalculationConfirm": "Heavy calculation ({{formatted}} points). Continue?",
       "sectorMode": "Sector",
       "polygonMode": "Polygon",
       "drawPolygon": "Draw polygon",
       "finishDrawing": "Finish drawing",
-      "pointsCount": "points"
+      "pointsCount": "points",
+      "selectOnMap": "Click on the map to select a point",
+      "heavyCalculation": "heavy calculation",
+      "maxPointsExceeded": "Maximum {{max}} points"
     },
     "peakFinder": {
       "title": "Peak Finder",
@@ -469,7 +489,7 @@
       "closePolygon": "Close polygon",
       "clearPolygon": "Clear",
       "searchArea": "Search area",
-      "clickAddPoints": "Click to add points \u2022 double-click to finish",
+      "clickAddPoints": "Click to add points • double-click to finish",
       "maxPeaks": "Max peaks",
       "minSeparation": "Min separation",
       "resolution": "Resolution",
@@ -491,7 +511,13 @@
       "drawHint": "Click map to add points, double-click to close",
       "searchSettings": "Search settings",
       "optional": "Optional",
-      "heavyCalculationConfirm": "Heavy calculation ({{count}} points). Continue?"
+      "heavyCalculationConfirm": "Heavy calculation ({{formatted}} points). Continue?",
+      "finish": "Finish",
+      "clickToAddPoints": "Click on the map to add polygon points",
+      "doubleClickToFinish": "Double-click to finish",
+      "estimatedPoints": "Estimated points",
+      "peaksFound": "peaks found",
+      "searching": "Searching…"
     },
     "dsm": {
       "title": "DSM Upload",
@@ -509,7 +535,27 @@
       "priority": "Priority",
       "enabled": "Enabled",
       "disabled": "Disabled",
-      "dropzoneText": "Drag a GeoTIFF file here or click to select"
+      "dropzoneText": "Drag a GeoTIFF file here or click to select",
+      "uploadError": "Upload failed",
+      "uploading": "Uploading…",
+      "layers": "Layers",
+      "points": "points",
+      "info": "About custom DSM",
+      "infoDescription": "Upload a high-resolution elevation model to use instead of the default terrain data in LOS calculations.",
+      "supportedFormats": "Supported formats",
+      "coordinateSystems": "Coordinate systems",
+      "israel": "Israel",
+      "errors": {
+        "unsupportedFormat": "Unsupported file type: {{ext}}",
+        "readError": "Error reading the file: {{message}}",
+        "ascMissingHeader": "The ASC file header is missing required fields",
+        "resUnknownFormat": "Unrecognized RES file format",
+        "resHeaderError": "Error reading the RES header",
+        "hgtInvalidSize": "Invalid HGT file size: {{size}} values",
+        "hgtNoCoordinates": "Could not read coordinates from the file name (expected e.g. N31E034.hgt)",
+        "geotiffError": "Error reading GeoTIFF: {{message}}",
+        "imgUnsupported": "IMG is a complex format. Convert it to ASC or GeoTIFF with QGIS/GDAL."
+      }
     },
     "results": {
       "title": "Current Results",
@@ -575,7 +621,8 @@
       "exportToFile": "Export to file",
       "results": "results",
       "update": "Update",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "backupSuffix": "backup"
     },
     "common": {
       "meters": "m",
@@ -593,6 +640,46 @@
       "pointA": "Point A",
       "pointB": "Point B",
       "origin": "Origin"
+    },
+    "validation": {
+      "invalidCoordinates": "Invalid coordinates",
+      "antennaHeightA": "Antenna A height is out of range",
+      "antennaHeightB": "Antenna B height is out of range",
+      "longDistance": "Distance over 200 km — accuracy may drop",
+      "shortDistance": "Very short distance — LOS calculation may be unnecessary",
+      "partialData": "Partial elevation data (only {{percent}}%)",
+      "constantElevation": "All elevation values are identical — possible data error",
+      "missingData": "Missing data: {{percent}}% of points",
+      "suspiciousJumps": "Suspicious jumps in the data ({{count}} points)"
+    },
+    "popup": {
+      "optical": "Optical",
+      "edit": "Edit",
+      "delete": "Delete",
+      "latitude": "Latitude",
+      "longitude": "Longitude",
+      "height": "Height",
+      "unavailable": "unavailable",
+      "peak": "Peak #{{rank}}",
+      "losClear": "Line of sight clear",
+      "losBlocked": "Line of sight blocked",
+      "point": "Point {{label}}",
+      "mode": "Mode",
+      "origin": "Origin point",
+      "targetHeight": "Target height",
+      "range": "Range",
+      "azimuth": "Azimuth",
+      "resolution": "Resolution"
     }
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "The page you're looking for doesn't exist.",
+    "backHome": "Back to home"
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "description": "The page failed to load. Reloading usually fixes it.",
+    "reload": "Reload page"
   }
 }

@@ -12,16 +12,23 @@ export function useHistory() {
   const [history, setHistory] = useState<CalculationRecord[]>([]);
 
   const refresh = useCallback(async () => {
-    if (!user) { setHistory([]); return; }
+    if (!user) return;
     try {
       const data = await apiGetHistory();
       setHistory(data.calculations);
     } catch {
-      // ignore
+      // History is optional; keep what we have.
     }
   }, [user]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    apiGetHistory()
+      .then(data => { if (!cancelled) setHistory(data.calculations); })
+      .catch(() => { /* keep what we have */ });
+    return () => { cancelled = true; };
+  }, [user]);
 
   const saveCalculation = async (data: {
     mode: string;
@@ -48,5 +55,6 @@ export function useHistory() {
     setHistory([]);
   };
 
-  return { history, saveCalculation, deleteCalculation, clearHistory };
+  // A logged-out user has no history, whatever was loaded before.
+  return { history: user ? history : [], saveCalculation, deleteCalculation, clearHistory };
 }

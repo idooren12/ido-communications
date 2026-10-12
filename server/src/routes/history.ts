@@ -1,84 +1,76 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { calculationSchema, validateBody } from '../lib/validation';
+import type { z } from 'zod';
 
 const router = Router();
-const prisma = new PrismaClient();
 
-// Get calculation history (most recent 20)
-router.get('/', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const calculations = await prisma.calculation.findMany({
-      where: { userId: req.userId },
-      orderBy: { createdAt: 'desc' },
-      take: 20,
-    });
-    res.json({ calculations });
-  } catch {
-    res.status(500).json({ error: 'Server error' });
-  }
+export const HISTORY_LIMIT = 20;
+
+router.use(authenticateToken);
+
+router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
+  const calculations = await prisma.calculation.findMany({
+    where: { userId: req.userId },
+    orderBy: { createdAt: 'desc' },
+    take: HISTORY_LIMIT,
+  });
+  res.json({ calculations });
 });
 
-// Save a calculation
-router.post('/', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const { mode, txPowerWatts, txGainDbi, rxGainDbi, frequencyMhz, sensitivity, distance, resultValue } = req.body;
+router.post('/', validateBody(calculationSchema), async (req: AuthRequest, res: Response): Promise<void> => {
+  const body = req.body as z.infer<typeof calculationSchema>;
+  const userId = req.userId!;
 
-    const calculation = await prisma.calculation.create({
+  const calculation = await prisma.$transaction(async tx => {
+    const created = await tx.calculation.create({
       data: {
-        userId: req.userId!,
-        mode,
-        txPowerWatts,
-        txGainDbi,
-        rxGainDbi,
-        frequencyMhz,
-        sensitivity: sensitivity ?? null,
-        distance: distance ?? null,
-        resultValue,
+        userId,
+        mode: body.mode,
+        txPowerWatts: body.txPowerWatts,
+        txGainDbi: body.txGainDbi,
+        rxGainDbi: body.rxGainDbi,
+        frequencyMhz: body.frequencyMhz,
+        sensitivity: body.sensitivity ?? null,
+        distance: body.distance ?? null,
+        resultValue: body.resultValue,
       },
     });
 
-    // Keep only most recent 20
-    const all = await prisma.calculation.findMany({
-      where: { userId: req.userId },
+    // Keep only the most recent HISTORY_LIMIT entries.
+    const stale = await tx.calculation.findMany({
+      where: { userId },
       orderBy: { createdAt: 'desc' },
-      skip: 20,
+      skip: HISTORY_LIMIT,
+      select: { id: true },
     });
-    if (all.length > 0) {
-      await prisma.calculation.deleteMany({
-        where: { id: { in: all.map(c => c.id) } },
-      });
+    if (stale.length > 0) {
+      await tx.calculation.deleteMany({ where: { id: { in: stale.map(c => c.id) } } });
     }
 
-    res.json({ calculation });
-  } catch {
-    res.status(500).json({ error: 'Server error' });
-  }
+    return created;
+  });
+
+  res.status(201).json({ calculation });
 });
 
-// Delete a single calculation
-router.delete('/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    await prisma.calculation.deleteMany({
-      where: { id, userId: req.userId },
-    });
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: 'Server error' });
+router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { count } = await prisma.calculation.deleteMany({
+    where: { id: String(req.params.id), userId: req.userId },
+  });
+
+  if (count === 0) {
+    res.status(404).json({ error: 'Calculation not found' });
+    return;
   }
+
+  res.json({ success: true });
 });
 
-// Clear all history
-router.delete('/', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    await prisma.calculation.deleteMany({
-      where: { userId: req.userId },
-    });
-    res.json({ success: true });
-  } catch {
-    res.status(500).json({ error: 'Server error' });
-  }
+router.delete('/', async (req: AuthRequest, res: Response): Promise<void> => {
+  await prisma.calculation.deleteMany({ where: { userId: req.userId } });
+  res.json({ success: true });
 });
 
 export default router;

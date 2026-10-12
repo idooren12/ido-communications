@@ -162,7 +162,7 @@ export class StreamingRasterCanvas {
       this.canvas = c;
     }
 
-    this.ctx = this.canvas.getContext('2d') as any;
+    this.ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
     if (!this.ctx) throw new Error('Could not get canvas context');
     this.imageData = this.ctx.createImageData(W, H);
 
@@ -410,7 +410,7 @@ export function gridToImageUrl(
     const scaledWidth = Math.max(1, Math.round(width * scale));
     const scaledHeight = Math.max(1, Math.round(height * scale));
     // Pass all cells directly - render functions skip null cells
-    return renderScaled(cells, bounds, scaledWidth, scaledHeight, latStep, lonStep);
+    return renderScaled(cells, bounds, scaledWidth, scaledHeight);
   }
 
   return render(cells, bounds, width, height, latStep, lonStep);
@@ -474,8 +474,6 @@ function renderScaled(
   bounds: GridBounds,
   width: number,
   height: number,
-  latStep: number,
-  lonStep: number,
 ): RasterResult {
   const canvas = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(width, height)
@@ -542,7 +540,7 @@ function canvasToDataUrl(canvas: OffscreenCanvas | HTMLCanvasElement): string {
   const ctx = regular.getContext('2d');
   if (ctx) {
     // Transfer OffscreenCanvas content
-    const bitmap = (canvas as any).transferToImageBitmap();
+    const bitmap = (canvas as OffscreenCanvas).transferToImageBitmap();
     ctx.drawImage(bitmap, 0, 0);
     bitmap.close();
   }

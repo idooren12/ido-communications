@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
+import { ApiError, apiErrorKey } from '../../utils/api';
 
 interface Props {
   onSwitch: () => void;
@@ -24,8 +25,8 @@ export default function LoginForm({ onSwitch }: Props) {
     setLoading(true);
     try {
       await login(username, password);
-    } catch {
-      setError(t('errors.invalidCredentials'));
+    } catch (err) {
+      setError(t(err instanceof ApiError && err.status === 401 ? 'errors.invalidCredentials' : apiErrorKey(err)));
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,6 @@
 import React, { Suspense } from 'react';
 import { LOSProvider } from '../contexts/LOSContext';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import '../components/LOS/globals.css';
 
 const UnifiedMap = React.lazy(() => import('../components/LOS/UnifiedMap'));

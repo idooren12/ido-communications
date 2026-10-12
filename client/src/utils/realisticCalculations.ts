@@ -120,89 +120,139 @@ export function calculateEnvironmentLoss(
 
 // ── Atmospheric Loss Calculation ───────────────────────────────────────
 
-/**
- * Rain attenuation (dB) based on rain rate, frequency, and distance.
- * Simplified ITU-R P.838 model.
- */
-function rainAttenuation(rainMmH: number, frequencyMhz: number, distanceKm: number): number {
-  if (rainMmH <= 0) return 0;
+// ITU-R P.838-3 coefficients (horizontal polarisation) for specific rain attenuation
+// γ = k · R^α  (dB/km, R in mm/h). Interpolated linearly in log(f) for log(k) and α.
+const P838_TABLE: ReadonlyArray<readonly [fGHz: number, k: number, alpha: number]> = [
+  [1, 0.0000259, 0.9691],
+  [1.5, 0.0000443, 1.0185],
+  [2, 0.0000847, 1.0664],
+  [2.5, 0.0001321, 1.1209],
+  [3, 0.000139, 1.2322],
+  [3.5, 0.0001155, 1.4189],
+  [4, 0.0001071, 1.6009],
+  [4.5, 0.000134, 1.6948],
+  [5, 0.0002162, 1.6969],
+  [5.5, 0.0003909, 1.6499],
+  [6, 0.0007056, 1.59],
+  [7, 0.001915, 1.481],
+  [8, 0.004115, 1.3905],
+  [9, 0.007535, 1.3155],
+  [10, 0.01217, 1.2571],
+  [12, 0.02386, 1.1825],
+  [15, 0.04481, 1.1233],
+  [20, 0.09164, 1.0568],
+  [25, 0.1571, 0.9991],
+  [30, 0.2403, 0.9485],
+  [35, 0.3374, 0.9047],
+  [40, 0.4431, 0.8673],
+  [50, 0.66, 0.8084],
+  [60, 0.8606, 0.7656],
+  [70, 1.0315, 0.7345],
+  [80, 1.1704, 0.7115],
+  [90, 1.2807, 0.6944],
+  [100, 1.3671, 0.6815],
+];
 
-  let specificAtten: number; // dB/km per mm/h
-  if (frequencyMhz < 1000) {
-    // VHF/UHF — minimal rain effect
-    specificAtten = 0.01;
-  } else if (frequencyMhz < 5000) {
-    // Low microwave
-    specificAtten = 0.03;
-  } else if (frequencyMhz < 10000) {
-    // Mid microwave
-    specificAtten = 0.05;
-  } else if (frequencyMhz < 30000) {
-    // High microwave
-    specificAtten = 0.15;
-  } else {
-    // mmWave
-    specificAtten = 0.3;
+/** k and α of ITU-R P.838-3 for a frequency (GHz). */
+export function rainCoefficients(fGHz: number): { k: number; alpha: number } {
+  const first = P838_TABLE[0];
+  const last = P838_TABLE[P838_TABLE.length - 1];
+  if (fGHz <= first[0]) {
+    // Below 1 GHz rain attenuation is negligible; k falls off roughly as f².
+    return { k: first[1] * (fGHz / first[0]) ** 2, alpha: first[2] };
   }
+  if (fGHz >= last[0]) return { k: last[1], alpha: last[2] };
 
-  // Effective path length reduction for longer distances
-  const effectiveDistance = distanceKm * (1 / (1 + distanceKm / 35));
-  return rainMmH * specificAtten * effectiveDistance;
+  for (let i = 1; i < P838_TABLE.length; i++) {
+    const [f1, k1, a1] = P838_TABLE[i - 1];
+    const [f2, k2, a2] = P838_TABLE[i];
+    if (fGHz <= f2) {
+      const t = Math.log10(fGHz / f1) / Math.log10(f2 / f1);
+      return {
+        k: 10 ** (Math.log10(k1) + t * (Math.log10(k2) - Math.log10(k1))),
+        alpha: a1 + t * (a2 - a1),
+      };
+    }
+  }
+  return { k: last[1], alpha: last[2] };
 }
 
 /**
- * Fog / low visibility attenuation (dB).
- * When visibility drops below 10 km, signal propagation is affected.
+ * Rain attenuation (dB): ITU-R P.838-3 specific attenuation times an effective path
+ * length (rain cells are smaller than long links; distance factor from ITU-R P.530).
  */
-function fogAttenuation(visibility: number, frequencyMhz: number, distanceKm: number): number {
-  if (visibility >= 10000) return 0;
-
-  // Fog is most impactful at higher frequencies
-  const freqFactor = frequencyMhz > 10000 ? 2.0 : frequencyMhz > 3000 ? 1.0 : 0.3;
-  // Loss scales inversely with visibility
-  const visibilityKm = visibility / 1000;
-  const lossPerKm = freqFactor * (1 - visibilityKm / 10);
-  return Math.max(0, lossPerKm * Math.min(distanceKm, 20));
+export function rainAttenuation(rainMmH: number, frequencyMhz: number, distanceKm: number): number {
+  if (rainMmH <= 0 || distanceKm <= 0) return 0;
+  const { k, alpha } = rainCoefficients(frequencyMhz / 1000);
+  const specificDbPerKm = k * rainMmH ** alpha;
+  const d0 = 35 * Math.exp(-0.015 * Math.min(rainMmH, 100));
+  const effectiveDistance = distanceKm / (1 + distanceKm / d0);
+  return specificDbPerKm * effectiveDistance;
 }
 
 /**
- * Humidity absorption (dB).
- * Water vapor causes molecular absorption, especially above 10 GHz.
- * Simplified model for planning purposes.
+ * Specific attenuation coefficient of liquid water in cloud/fog, ITU-R P.840
+ * (double-Debye model). Returns (dB/km)/(g/m³).
  */
-function humidityAbsorption(humidity: number, frequencyMhz: number, distanceKm: number): number {
-  if (humidity <= 50) return 0;
-
-  // Excess humidity above 50%
-  const excessHumidity = (humidity - 50) / 100;
-
-  // Frequency-dependent factor
-  let freqFactor: number;
-  if (frequencyMhz < 2000) freqFactor = 0.01;
-  else if (frequencyMhz < 10000) freqFactor = 0.03;
-  else if (frequencyMhz < 30000) freqFactor = 0.08;
-  else freqFactor = 0.15;
-
-  return excessHumidity * freqFactor * distanceKm * 10;
+export function fogSpecificCoefficient(fGHz: number, temperatureC: number): number {
+  const theta = 300 / (temperatureC + 273.15);
+  const e0 = 77.66 + 103.3 * (theta - 1);
+  const e1 = 0.0671 * e0;
+  const e2 = 3.52;
+  const fp = 20.2 - 146 * (theta - 1) + 316 * (theta - 1) ** 2;
+  const fs = 39.8 * fp;
+  const ePrime2 = (fGHz * (e0 - e1)) / (fp * (1 + (fGHz / fp) ** 2)) + (fGHz * (e1 - e2)) / (fs * (1 + (fGHz / fs) ** 2));
+  const ePrime = (e0 - e1) / (1 + (fGHz / fp) ** 2) + (e1 - e2) / (1 + (fGHz / fs) ** 2) + e2;
+  const eta = (2 + ePrime) / ePrime2;
+  return (0.819 * fGHz) / (ePrime2 * (1 + eta ** 2));
 }
 
 /**
- * Dust / sand attenuation (dB).
- * Relevant primarily for desert regions (Negev, Arava, etc.).
+ * Fog attenuation (dB). Liquid water content is estimated from visibility
+ * (M = (0.024 / V_km)^1.54 g/m³, Eldridge) and only applied in actual fog (V < 1 km).
+ * Fog banks are local, so at most 10 km of the path is assumed to be in fog.
  */
-function dustAttenuation(
-  dustProbability: number,
-  visibility: number,
-  frequencyMhz: number,
-  distanceKm: number
-): number {
-  if (dustProbability < 0.1) return 0;
-  // Only apply if visibility is reduced (possible dust condition)
-  if (visibility >= 8000) return 0;
+export function fogAttenuation(visibilityM: number, frequencyMhz: number, distanceKm: number, temperatureC = 15): number {
+  if (visibilityM >= 1000 || distanceKm <= 0) return 0;
+  const visibilityKm = Math.max(visibilityM, 10) / 1000;
+  const liquidWater = (0.024 / visibilityKm) ** 1.54;
+  return fogSpecificCoefficient(frequencyMhz / 1000, temperatureC) * liquidWater * Math.min(distanceKm, 10);
+}
 
-  const freqFactor = frequencyMhz > 10000 ? 2.0 : frequencyMhz > 3000 ? 1.0 : 0.5;
-  const visReduction = (8000 - visibility) / 8000;
-  return dustProbability * freqFactor * visReduction * 5 * Math.min(distanceKm, 15);
+/** Water-vapour density (g/m³) from relative humidity and temperature (Magnus formula). */
+export function waterVapourDensity(humidityPercent: number, temperatureC: number): number {
+  const saturationHpa = 6.1121 * Math.exp((17.502 * temperatureC) / (temperatureC + 240.97));
+  const vapourHpa = (Math.min(Math.max(humidityPercent, 0), 100) / 100) * saturationHpa;
+  return (216.7 * vapourHpa) / (temperatureC + 273.15);
+}
+
+/**
+ * Water-vapour absorption (dB), simplified ITU-R P.676 sea-level model (valid < 350 GHz).
+ * Negligible below a few GHz; peaks around the 22 GHz water line.
+ */
+export function humidityAbsorption(humidityPercent: number, frequencyMhz: number, distanceKm: number, temperatureC = 15): number {
+  if (distanceKm <= 0 || humidityPercent <= 0) return 0;
+  const f = Math.min(frequencyMhz / 1000, 350);
+  const rho = waterVapourDensity(humidityPercent, temperatureC);
+  const gammaW =
+    (0.05 + 0.0021 * rho + 3.6 / ((f - 22.2) ** 2 + 8.5) + 10.6 / ((f - 183.3) ** 2 + 9.0) + 8.9 / ((f - 325.4) ** 2 + 26.3)) *
+    f ** 2 *
+    rho *
+    1e-4;
+  return gammaW * distanceKm;
+}
+
+/**
+ * Dust / sand attenuation (dB) — engineering approximation for desert regions.
+ * Measured values are ~0.1–1 dB/km at 10 GHz in severe storms (visibility tens of metres)
+ * and scale roughly with frequency and inversely with visibility. Applied only when
+ * visibility is reduced, weighted by how likely dust is the cause in this region.
+ */
+export function dustAttenuation(dustProbability: number, visibilityM: number, frequencyMhz: number, distanceKm: number): number {
+  if (dustProbability < 0.1 || visibilityM >= 8000 || distanceKm <= 0) return 0;
+  const visibilityKm = Math.max(visibilityM, 10) / 1000;
+  const specificDbPerKm = Math.min((1.5e-3 * (frequencyMhz / 1000)) / visibilityKm, 5);
+  return dustProbability * specificDbPerKm * Math.min(distanceKm, 15);
 }
 
 export function calculateAtmosphericLoss(
@@ -213,8 +263,8 @@ export function calculateAtmosphericLoss(
 ): AtmosphericLoss {
   return {
     rainDb: Math.max(0, rainAttenuation(weather.rainMmH, frequencyMhz, distanceKm)),
-    fogDb: Math.max(0, fogAttenuation(weather.visibility, frequencyMhz, distanceKm)),
-    humidityDb: Math.max(0, humidityAbsorption(weather.humidity, frequencyMhz, distanceKm)),
+    fogDb: Math.max(0, fogAttenuation(weather.visibility, frequencyMhz, distanceKm, weather.temperature)),
+    humidityDb: Math.max(0, humidityAbsorption(weather.humidity, frequencyMhz, distanceKm, weather.temperature)),
     dustDb: Math.max(0, dustAttenuation(region.dustProbability, weather.visibility, frequencyMhz, distanceKm)),
   };
 }
@@ -359,10 +409,9 @@ export function calculateRealisticReceivedPower(
   // 3. Realistic received power
   const realisticPowerDbm = freeSpacePowerDbm - extraLossDb;
 
-  // 4. Recommendations
-  const reductionPercent = freeSpacePowerDbm !== 0
-    ? (extraLossDb / Math.abs(freeSpacePowerDbm)) * 100
-    : 0;
+  // 4. Recommendations. Express the extra loss as the equivalent range reduction, the same
+  // quantity the max-distance mode reports, so both modes share the recommendation thresholds.
+  const reductionPercent = extraLossToRangeReductionPercent(extraLossDb);
   const recommendations = generateRecommendations(region, weather, frequencyMhz, reductionPercent);
 
   return {
@@ -373,6 +422,15 @@ export function calculateRealisticReceivedPower(
     atmosphericLoss,
     recommendations,
   };
+}
+
+/**
+ * Range reduction (%) equivalent to an extra loss, for a free-space (20 dB/decade) link:
+ * d_new / d_old = 10^(-L/20).
+ */
+export function extraLossToRangeReductionPercent(extraLossDb: number): number {
+  if (extraLossDb <= 0) return 0;
+  return (1 - 10 ** (-extraLossDb / 20)) * 100;
 }
 
 // ── Recommendations ────────────────────────────────────────────────────

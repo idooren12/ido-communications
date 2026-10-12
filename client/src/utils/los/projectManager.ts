@@ -12,7 +12,13 @@ function generateId(): string {
 }
 
 // Serialize dates for JSON storage
-function serializeProject(project: Project): any {
+type SerializedProject = Omit<Project, 'createdAt' | 'updatedAt' | 'results'> & {
+  createdAt: string;
+  updatedAt: string;
+  results: Array<Omit<Project['results'][number], 'timestamp'> & { timestamp: string }>;
+};
+
+function serializeProject(project: Project): SerializedProject {
   return {
     ...project,
     createdAt: project.createdAt.toISOString(),
@@ -25,12 +31,12 @@ function serializeProject(project: Project): any {
 }
 
 // Deserialize dates from JSON storage
-function deserializeProject(data: any): Project {
+function deserializeProject(data: SerializedProject): Project {
   return {
     ...data,
     createdAt: new Date(data.createdAt),
     updatedAt: new Date(data.updatedAt),
-    results: data.results.map((r: any) => ({
+    results: data.results.map(r => ({
       ...r,
       timestamp: new Date(r.timestamp),
     })),
@@ -165,7 +171,7 @@ export async function importProjectFromFile(file: File): Promise<Project> {
         });
 
         resolve(project);
-      } catch (e) {
+      } catch {
         reject(new Error('Failed to parse project file'));
       }
     };

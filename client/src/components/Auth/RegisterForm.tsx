@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
+import { ApiError, apiErrorKey } from '../../utils/api';
 
 interface Props {
   onSwitch: () => void;
@@ -24,17 +25,17 @@ export default function RegisterForm({ onSwitch }: Props) {
     if (!/^[a-zA-Z0-9_]+$/.test(username)) { setError(t('errors.usernameFormat')); return; }
     if (!password) { setError(t('errors.passwordRequired')); return; }
     if (password.length < 6) { setError(t('errors.passwordLength')); return; }
+    if (new TextEncoder().encode(password).length > 72) { setError(t('errors.passwordTooLong')); return; }
     if (password !== confirmPassword) { setError(t('errors.passwordMismatch')); return; }
 
     setLoading(true);
     try {
       await register(username, password);
     } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('already') || message.includes('taken')) {
+      if (err instanceof ApiError && err.status === 409) {
         setError(t('errors.usernameTaken'));
       } else {
-        setError(t('errors.serverError'));
+        setError(t(apiErrorKey(err)));
       }
     } finally {
       setLoading(false);

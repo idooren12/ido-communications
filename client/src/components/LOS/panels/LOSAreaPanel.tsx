@@ -1,5 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import type * as maplibregl from 'maplibre-gl';
 import { RF_FREQUENCIES } from '../../../utils/los/los';
 import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress, type Completion } from '../../../utils/los/MassiveCalculationEngine';
 import { sphericalPolygonArea, type LatLon } from '../../../utils/los/geo';
@@ -11,7 +12,6 @@ import styles from './LOSAreaPanel.module.css';
 type CalculationMode = 'optical' | 'rf';
 
 const MAX_POINTS_WARNING = 5000000;
-const MAX_POINTS_ABSOLUTE = 500000000;
 
 export default function LOSAreaPanel() {
   const { t } = useTranslation();
@@ -81,7 +81,7 @@ export default function LOSAreaPanel() {
   // Consume editingResultData when editing from a saved result
   useEffect(() => {
     if (editingResultData && editingResultData.type === 'los-area') {
-      const params = editingResultData.params as any;
+      const params = editingResultData.params as LOSAreaParams;
       setLat(params.origin.lat.toFixed(6));
       setLon(params.origin.lon.toFixed(6));
       setHeight(String(params.origin.height || 10));
@@ -181,7 +181,7 @@ export default function LOSAreaPanel() {
       setPreviewGridCells([]);
       setPreviewRasterResult(null);
     };
-  }, [origin, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, toMeters, areaMode, polygonPoints, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells, setPreviewRasterResult]);
+  }, [origin, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, toMeters, areaMode, polygonPoints, setPreviewPoints, setPreviewSector, setPreviewPolygon, setPreviewGridCells, setPreviewRasterResult, t]);
 
   // Register click handler for origin picking
   useEffect(() => {
@@ -213,22 +213,19 @@ export default function LOSAreaPanel() {
       }
     }, 'crosshair');
 
-    const handleDblClick = (mapEvent: any) => {
+    const handleDblClick = (mapEvent: maplibregl.MapMouseEvent) => {
       if (drawingPolygonRef.current) {
         mapEvent.preventDefault?.();
         setDrawingPolygon(false);
       }
     };
 
-    if (mapRef.current) {
-      mapRef.current.on('dblclick', handleDblClick);
-    }
+    const map = mapRef.current;
+    map?.on('dblclick', handleDblClick);
 
     return () => {
       setMapClickHandler(null);
-      if (mapRef.current) {
-        mapRef.current.off('dblclick', handleDblClick);
-      }
+      map?.off('dblclick', handleDblClick);
     };
   }, [drawingPolygon, setMapClickHandler, mapRef]);
 
@@ -238,7 +235,7 @@ export default function LOSAreaPanel() {
 
     // Check point count
     if (estimatedPointCount > MAX_POINTS_WARNING) {
-      const confirm = window.confirm(t('los.losArea.heavyCalculationConfirm', { count: estimatedPointCount.toLocaleString() }));
+      const confirm = window.confirm(t('los.losArea.heavyCalculationConfirm', { formatted: estimatedPointCount.toLocaleString() }));
       if (!confirm) return;
     }
 
@@ -326,12 +323,12 @@ export default function LOSAreaPanel() {
           }
           setProgress(prog.percent);
         },
-        onBoundsReady: (bounds: GridBounds, totalPoints: number) => {
+        onBoundsReady: (bounds: GridBounds) => {
           if (cancelRef.current) return;
           rasterCanvasRef.current = new StreamingRasterCanvas(bounds, res);
           lastFlushTime = Date.now();
         },
-        onBatchResult: (batch: RasterCell[], prog: TaskProgress) => {
+        onBatchResult: (batch: RasterCell[]) => {
           if (cancelRef.current) return;
 
           // Paint to raster canvas

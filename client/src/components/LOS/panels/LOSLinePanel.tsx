@@ -1,6 +1,6 @@
-import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Area, ComposedChart } from 'recharts';
+import { Line, XAxis, YAxis, ResponsiveContainer, Area, ComposedChart } from 'recharts';
 import { type LOSResult, RF_FREQUENCIES } from '../../../utils/los/los';
 import { calculateLOSAsync } from '../../../utils/los/workers/workerPool';
 import { haversineDistance, initialBearing, formatDistance } from '../../../utils/los/geo';
@@ -24,7 +24,7 @@ export default function LOSLinePanel() {
   const [heightB, setHeightB] = useState('2');
   const [calcMode, setCalcMode] = useState<CalculationMode>('optical');
   const [rfFrequency, setRfFrequency] = useState<string>('2.4GHz');
-  const [showFresnel, setShowFresnel] = useState(true);
+  const [showFresnel] = useState(true);
   const [result, setResult] = useState<LOSResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +52,9 @@ export default function LOSLinePanel() {
   // Consume editingResultData when editing from a saved result
   useEffect(() => {
     if (editingResultData && editingResultData.type === 'los-line') {
-      const params = editingResultData.params as any;
+      const params = editingResultData.params as LOSLineParams;
+      // Applying a one-shot "edit this result" request from the LOS context.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLatA(params.pointA.lat.toFixed(6));
       setLonA(params.pointA.lon.toFixed(6));
       setHeightA(String(params.pointA.height || 2));
@@ -111,7 +113,7 @@ export default function LOSLinePanel() {
       setPreviewPoints([]);
       setPreviewLine(null);
     };
-  }, [pointA, pointB, setPreviewPoints, setPreviewLine]);
+  }, [pointA, pointB, setPreviewPoints, setPreviewLine, t]);
 
   // Register click handler with the context
   useEffect(() => {
@@ -149,7 +151,7 @@ export default function LOSLinePanel() {
     const startTime = performance.now();
 
     try {
-      const options: any = { sampleStepMeters: 30 };
+      const options: { sampleStepMeters: number; frequencyMHz?: number } = { sampleStepMeters: 30 };
       if (calcMode === 'rf') {
         options.frequencyMHz = RF_FREQUENCIES[rfFrequency as keyof typeof RF_FREQUENCIES];
       }

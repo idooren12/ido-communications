@@ -1,5 +1,14 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { apiLogin, apiRegister, apiGetMe, apiChangePassword } from '../utils/api';
+import { apiLogin, apiRegister, apiGetMe, apiChangePassword, ApiError, readToken } from '../utils/api';
+
+function storeToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem('token', token);
+    else localStorage.removeItem('token');
+  } catch {
+    // Storage unavailable (private mode / blocked): the session lasts for this tab only.
+  }
+}
 
 interface User {
   id: string;
@@ -21,36 +30,37 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Only wait for /me when there is a token to check.
+  const [loading, setLoading] = useState(() => readToken() !== null);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      apiGetMe()
-        .then(data => setUser(data.user))
-        .catch(() => {
-          localStorage.removeItem('token');
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
-    }
+    if (!readToken()) return;
+    apiGetMe()
+      .then(data => setUser(data.user))
+      .catch((err: unknown) => {
+        // Log out only when the server actually rejected the token. A network error or a
+        // sleeping server (Render free tier) must not throw away a valid session.
+        if (err instanceof ApiError && err.isAuthError) {
+          storeToken(null);
+        }
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   const login = async (username: string, password: string) => {
     const data = await apiLogin(username, password);
-    localStorage.setItem('token', data.token);
+    storeToken(data.token);
     setUser(data.user);
   };
 
   const register = async (username: string, password: string) => {
     const data = await apiRegister(username, password);
-    localStorage.setItem('token', data.token);
+    storeToken(data.token);
     setUser(data.user);
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    storeToken(null);
     setUser(null);
   };
 

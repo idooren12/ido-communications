@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUnits } from '../../contexts/UnitsContext';
 import { fromKm } from '../../utils/unitConversions';
-import { generatePDF } from '../../utils/pdfExport';
 import type { CalculationDetails as Details } from '../../utils/friisCalculations';
 import CalculationDetails from './CalculationDetails';
 
@@ -22,9 +21,11 @@ export type CalcResult = DistanceResult | PowerResult;
 
 interface Props {
   result: CalcResult;
+  /** The values the user entered, for the PDF report. */
+  inputs: { txPowerWatts: number; txGainDbi: number; rxGainDbi: number };
 }
 
-export default function ResultDisplay({ result }: Props) {
+export default function ResultDisplay({ result, inputs }: Props) {
   const { t, i18n } = useTranslation();
   const { distanceUnit } = useUnits();
   const [showDetails, setShowDetails] = useState(false);
@@ -63,12 +64,14 @@ export default function ResultDisplay({ result }: Props) {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
+    // jsPDF is loaded only when a report is actually exported.
+    const { generatePDF } = await import('../../utils/pdfExport');
     generatePDF({
       mode: result.type,
-      txPowerWatts: result.details.txPowerDbm, // dBm value for display
-      txGainDbi: result.details.totalGain / 2, // approximate
-      rxGainDbi: result.details.totalGain / 2,
+      txPowerWatts: inputs.txPowerWatts,
+      txGainDbi: inputs.txGainDbi,
+      rxGainDbi: inputs.rxGainDbi,
       frequencyMhz: result.details.frequencyMhz,
       sensitivityDbm: result.details.rxSensitivityDbm,
       distanceKm: result.details.distanceKm,

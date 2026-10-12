@@ -5,6 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   calculateSafeDistance,
   getICNIRPLimit,
+  isWithinNearField,
+  GROUND_REFLECTION_FACTOR,
+  ICNIRP_MIN_MHZ,
+  ICNIRP_MAX_MHZ,
   type PopulationType,
   type RFSafetyResult,
 } from '../utils/rfSafetyCalculations';
@@ -20,7 +24,9 @@ export default function RFSafety() {
   const [population, setPopulation] = useState<PopulationType>('public');
   const [densityMode, setDensityMode] = useState<'auto' | 'manual'>('auto');
   const [manualDensity, setManualDensity] = useState('');
+  const [groundReflection, setGroundReflection] = useState(true);
   const [result, setResult] = useState<RFSafetyResult | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [showDetails, setShowDetails] = useState(false);
 
@@ -35,6 +41,8 @@ export default function RFSafety() {
   const handleCalculate = () => {
     setError('');
     setResult(null);
+    setWarnings([]);
+    const newWarnings: string[] = [];
 
     const p = parseFloat(power);
     const g = parseFloat(gain);
@@ -43,11 +51,17 @@ export default function RFSafety() {
     if (isNaN(g)) { setError(t('errors.gainNumber')); return; }
 
     let densityLimit: number;
+    const f = parseFloat(frequency);
 
     if (densityMode === 'auto') {
-      const f = parseFloat(frequency);
       if (isNaN(f) || f <= 0) { setError(t('errors.frequencyPositive')); return; }
-      densityLimit = getICNIRPLimit(f, population);
+      const icnirp = getICNIRPLimit(f, population);
+      if (!icnirp) {
+        setError(t('rfSafety.outOfRange', { min: ICNIRP_MIN_MHZ, max: ICNIRP_MAX_MHZ.toLocaleString() }));
+        return;
+      }
+      densityLimit = icnirp.limit;
+      if (icnirp.approximate) newWarnings.push(t('rfSafety.hfApproximate'));
     } else {
       const d = parseFloat(manualDensity);
       if (isNaN(d) || d <= 0) { setError(t('errors.powerPositive')); return; }
@@ -55,12 +69,16 @@ export default function RFSafety() {
     }
 
     try {
-      const res = calculateSafeDistance(p, g, densityLimit);
+      const res = calculateSafeDistance(p, g, densityLimit, { groundReflection });
       if (!isFinite(res.safeDistanceMeters) || res.safeDistanceMeters <= 0) {
         setError(t('errors.calculationError'));
         return;
       }
+      if (!isNaN(f) && f > 0 && isWithinNearField(res.safeDistanceMeters, f)) {
+        newWarnings.push(t('rfSafety.nearField'));
+      }
       setResult(res);
+      setWarnings(newWarnings);
     } catch {
       setError(t('errors.calculationError'));
     }
@@ -69,7 +87,7 @@ export default function RFSafety() {
   const autoLimit = (() => {
     const f = parseFloat(frequency);
     if (densityMode === 'auto' && !isNaN(f) && f > 0) {
-      return getICNIRPLimit(f, population);
+      return getICNIRPLimit(f, population)?.limit ?? null;
     }
     return null;
   })();
@@ -132,22 +150,20 @@ export default function RFSafety() {
           </div>
         </div>
 
-        {densityMode === 'auto' && (
-          <div className="mt-4">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t('calculator.frequency')} (MHz)
-            </label>
-            <input
-              type="number"
-              value={frequency}
-              onChange={e => setFrequency(e.target.value)}
-              min="0"
-              step="any"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-slate-700 dark:text-gray-100 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-              dir="ltr"
-            />
-          </div>
-        )}
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            {t('calculator.frequency')} (MHz){densityMode === 'manual' && ` — ${t('rfSafety.optional')}`}
+          </label>
+          <input
+            type="number"
+            value={frequency}
+            onChange={e => setFrequency(e.target.value)}
+            min="0"
+            step="any"
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 dark:bg-slate-700 dark:text-gray-100 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+            dir="ltr"
+          />
+        </div>
       </div>
 
       {/* Safety Standard */}
@@ -221,11 +237,23 @@ export default function RFSafety() {
           )}
 
           {autoLimit !== null && (
-            <p className="mt-2 text-sm text-indigo-600 dark:text-indigo-400">
+            <p className="mt-2 text-sm text-indigo-600 dark:text-indigo-400" dir="ltr">
               S = {autoLimit.toFixed(2)} W/m²
             </p>
           )}
         </div>
+        <label className="mt-4 flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={groundReflection}
+            onChange={e => setGroundReflection(e.target.checked)}
+            className="mt-0.5 text-indigo-600"
+          />
+          <span className="text-sm text-gray-700 dark:text-gray-300">
+            {t('rfSafety.groundReflection', { factor: GROUND_REFLECTION_FACTOR })}
+            <span className="block text-xs text-gray-500 dark:text-gray-400">{t('rfSafety.groundReflectionHint')}</span>
+          </span>
+        </label>
       </div>
 
       {/* Calculate Button */}
@@ -257,6 +285,12 @@ export default function RFSafety() {
               {t('rfSafety.safeDistance')}
             </div>
           </div>
+
+          {warnings.length > 0 && (
+            <div className="p-4 text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-xl space-y-1">
+              {warnings.map(w => <p key={w}>⚠ {w}</p>)}
+            </div>
+          )}
 
           {/* Calculation Details */}
           <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
@@ -292,9 +326,13 @@ export default function RFSafety() {
                   <span>{t('rfSafety.powerDensity')}:</span>
                   <span className="font-mono">{result.powerDensityLimit.toFixed(2)} W/m²</span>
                 </div>
+                <div className="flex justify-between">
+                  <span>{t('rfSafety.reflectionFactor')}:</span>
+                  <span className="font-mono">{result.reflectionFactor}</span>
+                </div>
                 <hr className="border-gray-200 dark:border-gray-600" />
                 <div className="flex justify-between font-medium">
-                  <span>R = sqrt({result.eirpWatts.toFixed(2)} / (4{'\u03C0'} x {result.powerDensityLimit.toFixed(2)}))</span>
+                  <span>R = sqrt({result.reflectionFactor} x {result.eirpWatts.toFixed(2)} / (4{'\u03C0'} x {result.powerDensityLimit.toFixed(2)}))</span>
                   <span className="font-mono">{result.safeDistanceMeters.toFixed(2)} m</span>
                 </div>
               </div>

@@ -4,6 +4,8 @@
  * Supports both spherical (fast) and ellipsoidal (accurate) calculations
  */
 
+import i18n from '../../i18n/config';
+
 // WGS84 Ellipsoid Constants
 export const WGS84 = {
   a: 6378137.0,           // Semi-major axis (equatorial radius) in meters
@@ -175,8 +177,8 @@ export function vincentyDistance(
 
   let \u03BB = L;
   let \u03BBPrev: number;
-  let sin\u03C3: number, cos\u03C3: number, \u03C3: number;
-  let sin\u03B1: number, cos2\u03B1: number, cos2\u03C3m: number;
+  let sin\u03C3 = 0, cos\u03C3 = 0, \u03C3 = 0;
+  let sin\u03B1 = 0, cos2\u03B1 = 0, cos2\u03C3m = 0;
   let C: number;
 
   for (let i = 0; i < maxIterations; i++) {
@@ -412,24 +414,24 @@ export function metersToDegreesLon(meters: number, latitude: number): number {
 }
 
 /**
- * Format distance for display
+ * Format distance for display (localized units).
  */
 export function formatDistance(meters: number): string {
   if (meters < 1000) {
-    return `${Math.round(meters)} \u05DE'`;
+    return `${Math.round(meters)} ${i18n.t('units.m')}`;
   }
-  return `${(meters / 1000).toFixed(2)} \u05E7"\u05DE`;
+  return `${(meters / 1000).toFixed(2)} ${i18n.t('units.km')}`;
 }
 
 /**
- * Format area for display
+ * Format area for display (localized units; dunam = 1,000 m²).
  */
 export function formatArea(squareMeters: number): string {
   if (squareMeters < 10000) {
-    return `${Math.round(squareMeters)} \u05DE"\u05E8`;
+    return `${Math.round(squareMeters)} ${i18n.t('units.m2')}`;
   }
   if (squareMeters < 1000000) {
-    return `${(squareMeters / 10000).toFixed(2)} \u05D3\u05D5\u05E0\u05DD`;
+    return `${(squareMeters / 1000).toFixed(1)} ${i18n.t('units.dunam')}`;
   }
-  return `${(squareMeters / 1000000).toFixed(2)} \u05E7\u05DE"\u05E8`;
+  return `${(squareMeters / 1000000).toFixed(2)} ${i18n.t('units.km2')}`;
 }

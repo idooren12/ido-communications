@@ -137,7 +137,10 @@
     "passwordMismatch": "הסיסמאות אינן תואמות",
     "serverError": "שגיאת שרת, נסה שוב",
     "calculationError": "לא ניתן לבצע את החישוב עם הנתונים שהוזנו",
-    "fillRequiredFields": "מלא את כל השדות הנדרשים"
+    "fillRequiredFields": "מלא את כל השדות הנדרשים",
+    "serverUnavailable": "השרת לא מגיב. ייתכן שהוא מתעורר משינה, נסה שוב בעוד דקה.",
+    "tooManyAttempts": "יותר מדי ניסיונות. המתן כמה דקות ונסה שוב.",
+    "passwordTooLong": "הסיסמה יכולה להכיל עד 72 תווים"
   },
   "footer": {
     "copyright": "RF tools © {{year}}"
@@ -155,9 +158,9 @@
     "distance": "מרחק",
     "power": "הספק",
     "frequency": "תדר",
-    "km": "קילומטרים",
+    "km": "ק\"מ",
     "mi": "מיילים",
-    "m": "מטרים",
+    "m": "מ'",
     "ft": "רגל",
     "nmi": "מיילים ימיים",
     "W": "וואט",
@@ -167,7 +170,10 @@
     "Hz": "הרץ",
     "kHz": "קילוהרץ",
     "MHz": "מגהרץ",
-    "GHz": "גיגהרץ"
+    "GHz": "גיגהרץ",
+    "m2": "מ\"ר",
+    "dunam": "דונם",
+    "km2": "קמ\"ר"
   },
   "pdf": {
     "export": "ייצוא ל-PDF",
@@ -230,7 +236,14 @@
     "note1": "זהו מרחק מינימלי תיאורטי בתנאים אידיאליים",
     "note2": "בפועל מומלץ להוסיף מרווח בטיחות",
     "note3": "החישוב מניח שידור רציף (100% duty cycle)",
-    "note4": "התייעצו עם גורם מוסמך לפני התקנה"
+    "note4": "התייעצו עם גורם מוסמך לפני התקנה",
+    "outOfRange": "רמות הייחוס של ICNIRP מכסות {{min}}–{{max}} MHz. הזן תדר בטווח הזה או הגדר צפיפות הספק ידנית.",
+    "hfApproximate": "מתחת ל־30 MHz תקן ICNIRP 2020 מגדיר מגבלות שדה חשמלי ומגנטי ולא צפיפות הספק. כאן נעשה שימוש בצפיפות ההספק של 30 MHz (שמרני), ובתדרים האלה מרחק הבטיחות נמצא לעתים קרובות בשדה הקרוב, שבו הנוסחה לא מדויקת. מומלץ למדוד או להשתמש בשיטת שדה קרוב.",
+    "nearField": "התוצאה קרובה לאנטנה פחות מאורך גל אחד (שדה קרוב). נוסחת השדה הרחוק לא אמינה שם. יש להתייחס לתוצאה כהערכה בלבד ולמדוד בשטח.",
+    "groundReflection": "כולל החזרה מהקרקע (×{{factor}}, FCC OET-65)",
+    "groundReflectionHint": "מומלץ. קרן שמוחזרת מהקרקע יכולה להתחבר לקרן הישירה ולהעלות את צפיפות ההספק עד פי 2.56, מה שמגדיל את מרחק הבטיחות פי 1.6.",
+    "reflectionFactor": "מקדם החזרה",
+    "optional": "לא חובה, משמש לבדיקת שדה קרוב"
   },
   "profile": {
     "title": "הפרופיל שלי",
@@ -278,7 +291,8 @@
       "realisticPower": "הספק ריאליסטי",
       "freeSpacePower": "הספק חלל חופשי (תיאורטי)",
       "reduction": "הפחתה",
-      "inRegion": "באזור"
+      "inRegion": "באזור",
+      "modelNote": "הערכה לתכנון. גשם (ITU-R P.838), ערפל (P.840) ואדי מים (P.676) מחושבים לפי מודלים של ITU-R. צמחייה, בינוי, טופוגרפיה ואבק הם קירובים אזוריים פשוטים. קישורים קריטיים כדאי לאמת בבדיקת שטח."
     },
     "lossBreakdown": {
       "title": "פירוט הפסדים",
@@ -405,7 +419,10 @@
       "swap": "החלף נקודות",
       "saveResult": "שמור תוצאה",
       "elevationProfile": "פרופיל גובה",
-      "profile": "פרופיל"
+      "profile": "פרופיל",
+      "losLine": "קו ראייה",
+      "fresnelBlocked": "יש קו ראייה, אבל אזור פרנל חסום חלקית",
+      "minClearance": "מרווח מינימלי"
     },
     "losArea": {
       "title": "חישוב שטח",
@@ -453,12 +470,15 @@
       "azimuthRange": "טווח אזימוט",
       "estimatedPoints": "נקודות משוערות",
       "tooManyPoints": "יותר מדי נקודות: {{count}} (מקסימום: {{max}})",
-      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?",
+      "heavyCalculationConfirm": "חישוב כבד ({{formatted}} נקודות). להמשיך?",
       "sectorMode": "סקטור",
       "polygonMode": "מצולע",
       "drawPolygon": "צייר מצולע",
       "finishDrawing": "סיים ציור",
-      "pointsCount": "נקודות"
+      "pointsCount": "נקודות",
+      "selectOnMap": "לחץ על המפה לבחירת נקודה",
+      "heavyCalculation": "חישוב כבד",
+      "maxPointsExceeded": "מקסימום {{max}} נקודות"
     },
     "peakFinder": {
       "title": "מציאת פסגות",
@@ -491,7 +511,13 @@
       "drawHint": "לחץ על המפה כדי להוסיף נקודות, לחץ כפול לסגירה",
       "searchSettings": "הגדרות חיפוש",
       "optional": "אופציונלי",
-      "heavyCalculationConfirm": "חישוב כבד ({{count}} נקודות). להמשיך?"
+      "heavyCalculationConfirm": "חישוב כבד ({{formatted}} נקודות). להמשיך?",
+      "finish": "סיום",
+      "clickToAddPoints": "לחץ על המפה להוספת נקודות לפוליגון",
+      "doubleClickToFinish": "לחיצה כפולה לסיום",
+      "estimatedPoints": "מספר נקודות משוער",
+      "peaksFound": "פסגות נמצאו",
+      "searching": "מחפש…"
     },
     "dsm": {
       "title": "העלאת DSM",
@@ -509,7 +535,27 @@
       "priority": "עדיפות",
       "enabled": "מופעל",
       "disabled": "מושבת",
-      "dropzoneText": "גרור קובץ GeoTIFF לכאן או לחץ לבחירה"
+      "dropzoneText": "גרור קובץ GeoTIFF לכאן או לחץ לבחירה",
+      "uploadError": "ההעלאה נכשלה",
+      "uploading": "מעלה…",
+      "layers": "שכבות",
+      "points": "נקודות",
+      "info": "על DSM מותאם",
+      "infoDescription": "אפשר להעלות מודל גבהים ברזולוציה גבוהה, שישמש בחישובי קו ראייה במקום נתוני הגובה הרגילים.",
+      "supportedFormats": "פורמטים נתמכים",
+      "coordinateSystems": "מערכות קואורדינטות",
+      "israel": "ישראל",
+      "errors": {
+        "unsupportedFormat": "סוג קובץ לא נתמך: {{ext}}",
+        "readError": "שגיאה בקריאת הקובץ: {{message}}",
+        "ascMissingHeader": "חסרים שדות בכותרת קובץ ASC",
+        "resUnknownFormat": "לא ניתן לזהות פורמט קובץ RES",
+        "resHeaderError": "שגיאה בקריאת כותרת RES",
+        "hgtInvalidSize": "גודל קובץ HGT לא תקין: {{size}} ערכים",
+        "hgtNoCoordinates": "לא ניתן לחלץ קואורדינטות משם הקובץ (צפוי למשל N31E034.hgt)",
+        "geotiffError": "שגיאה בקריאת GeoTIFF: {{message}}",
+        "imgUnsupported": "פורמט IMG מורכב. מומלץ להמיר ל־ASC או GeoTIFF באמצעות QGIS/GDAL."
+      }
     },
     "results": {
       "title": "תוצאות נוכחיות",
@@ -575,7 +621,8 @@
       "exportToFile": "ייצוא לקובץ",
       "results": "תוצאות",
       "update": "עדכן",
-      "cancel": "ביטול"
+      "cancel": "ביטול",
+      "backupSuffix": "גיבוי"
     },
     "common": {
       "meters": "מ'",
@@ -593,6 +640,46 @@
       "pointA": "נקודה A",
       "pointB": "נקודה B",
       "origin": "נקודת מקור"
+    },
+    "validation": {
+      "invalidCoordinates": "קואורדינטות לא חוקיות",
+      "antennaHeightA": "גובה אנטנה A חריג",
+      "antennaHeightB": "גובה אנטנה B חריג",
+      "longDistance": "מרחק גדול מ־200 ק\"מ, הדיוק עלול לרדת",
+      "shortDistance": "מרחק קצר מאוד, ייתכן שאין צורך בחישוב קו ראייה",
+      "partialData": "נתוני גובה חלקיים ({{percent}}% בלבד)",
+      "constantElevation": "כל ערכי הגובה זהים, ייתכן שיש שגיאה בנתונים",
+      "missingData": "נתונים חסרים: {{percent}}% מהנקודות",
+      "suspiciousJumps": "קפיצות חריגות בנתונים ({{count}} נקודות)"
+    },
+    "popup": {
+      "optical": "אופטי",
+      "edit": "שנה",
+      "delete": "מחק",
+      "latitude": "קו רוחב",
+      "longitude": "קו אורך",
+      "height": "גובה",
+      "unavailable": "לא זמין",
+      "peak": "פסגה #{{rank}}",
+      "losClear": "קו ראייה פתוח",
+      "losBlocked": "קו ראייה חסום",
+      "point": "נקודה {{label}}",
+      "mode": "מצב",
+      "origin": "נקודת מקור",
+      "targetHeight": "גובה יעד",
+      "range": "טווח",
+      "azimuth": "אזימוט",
+      "resolution": "רזולוציה"
     }
+  },
+  "notFound": {
+    "title": "הדף לא נמצא",
+    "description": "הדף שחיפשת לא קיים.",
+    "backHome": "חזרה לדף הבית"
+  },
+  "errorBoundary": {
+    "title": "משהו השתבש",
+    "description": "הדף לא נטען כראוי. טעינה מחדש בדרך כלל פותרת את זה.",
+    "reload": "טען מחדש"
   }
 }

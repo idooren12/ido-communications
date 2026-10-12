@@ -44,7 +44,7 @@ export default function FriisCalculator() {
   const [realisticResult, setRealisticResult] = useState<RealisticCalcResult | null>(null);
   const [error, setError] = useState('');
   // Store base-unit values for the chart
-  const [lastCalcParams, setLastCalcParams] = useState({ txPowerW: 0, freqMhz: 0, distKm: 0 });
+  const [lastCalcParams, setLastCalcParams] = useState<{ txPowerW: number; txGainDbi: number; rxGainDbi: number; freqMhz: number; distKm: number; sensDbm?: number }>({ txPowerW: 0, txGainDbi: 0, rxGainDbi: 0, freqMhz: 0, distKm: 0 });
   const [attemptedSubmit, setAttemptedSubmit] = useState(false);
 
   // Realistic mode state
@@ -123,7 +123,7 @@ export default function FriisCalculator() {
           const realRes = calculateRealisticMaxDistance(
             txPowerW, txGainDbi, rxGainDbi, freqMhz, sensDbm, selectedRegion, weather
           );
-          setLastCalcParams({ txPowerW, freqMhz, distKm: realRes.realisticDistanceKm });
+          setLastCalcParams({ txPowerW, txGainDbi, rxGainDbi, freqMhz, distKm: realRes.realisticDistanceKm, sensDbm });
           setRealisticResult({ type: 'realistic_distance', ...realRes });
           // Auto-save with realistic value
           saveCalculation({
@@ -132,7 +132,7 @@ export default function FriisCalculator() {
           });
         } else {
           // Standard Friis
-          setLastCalcParams({ txPowerW, freqMhz, distKm: fsRes.distanceKm });
+          setLastCalcParams({ txPowerW, txGainDbi, rxGainDbi, freqMhz, distKm: fsRes.distanceKm, sensDbm });
           setResult({ type: 'distance', distanceKm: fsRes.distanceKm, details: fsRes.details });
           saveCalculation({
             mode: 'distance', txPowerWatts: txPowerW, txGainDbi, rxGainDbi,
@@ -154,7 +154,7 @@ export default function FriisCalculator() {
           const realRes = calculateRealisticReceivedPower(
             txPowerW, txGainDbi, rxGainDbi, freqMhz, distKm, selectedRegion, weather
           );
-          setLastCalcParams({ txPowerW, freqMhz, distKm });
+          setLastCalcParams({ txPowerW, txGainDbi, rxGainDbi, freqMhz, distKm });
           setRealisticResult({ type: 'realistic_power', ...realRes });
           saveCalculation({
             mode: 'power', txPowerWatts: txPowerW, txGainDbi, rxGainDbi,
@@ -162,7 +162,7 @@ export default function FriisCalculator() {
           });
         } else {
           // Standard Friis
-          setLastCalcParams({ txPowerW, freqMhz, distKm });
+          setLastCalcParams({ txPowerW, txGainDbi, rxGainDbi, freqMhz, distKm });
           setResult({ type: 'power', receivedPowerDbm: fsRes.receivedPowerDbm, details: fsRes.details });
           saveCalculation({
             mode: 'power', txPowerWatts: txPowerW, txGainDbi, rxGainDbi,
@@ -304,13 +304,24 @@ export default function FriisCalculator() {
             result={realisticResult}
             regionNameHe={selectedRegion.nameHe}
             regionNameEn={selectedRegion.nameEn}
+            inputs={{
+              txPowerWatts: lastCalcParams.txPowerW,
+              txGainDbi: lastCalcParams.txGainDbi,
+              rxGainDbi: lastCalcParams.rxGainDbi,
+              frequencyMhz: lastCalcParams.freqMhz,
+              sensitivityDbm: lastCalcParams.sensDbm,
+              distanceKm: realisticResult.type === 'realistic_power' ? lastCalcParams.distKm : undefined,
+            }}
           />
         </div>
       )}
 
       {showStandardResult && result && (
         <div className="mt-6">
-          <ResultDisplay result={result} />
+          <ResultDisplay
+            result={result}
+            inputs={{ txPowerWatts: lastCalcParams.txPowerW, txGainDbi: lastCalcParams.txGainDbi, rxGainDbi: lastCalcParams.rxGainDbi }}
+          />
         </div>
       )}
 

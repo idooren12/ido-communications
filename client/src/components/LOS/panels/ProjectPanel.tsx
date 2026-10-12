@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLOSState, type Project } from '../../../contexts/LOSContext';
 import {
@@ -31,19 +31,13 @@ function formatBytes(bytes: number): string {
 export default function ProjectPanel() {
   const { t } = useTranslation();
   const { state, loadProject } = useLOSState();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [storageInfo, setStorageInfo] = useState({ used: 0, projects: 0 });
+  const [projects, setProjects] = useState<Project[]>(getLocalProjects);
+  const [storageInfo, setStorageInfo] = useState(getStorageInfo);
   const [newProjectName, setNewProjectName] = useState('');
   const [showNewForm, setShowNewForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Load projects on mount
-  useEffect(() => {
-    const loadedProjects = getLocalProjects();
-    setProjects(loadedProjects);
-    setStorageInfo(getStorageInfo());
-  }, []);
 
   const handleCreateProject = useCallback(() => {
     if (!newProjectName.trim()) {
@@ -59,10 +53,10 @@ export default function ProjectPanel() {
       setShowNewForm(false);
       setError(null);
       setStorageInfo(getStorageInfo());
-    } catch (e: any) {
-      setError(e.message || t('los.projects.saveError'));
+    } catch (e) {
+      setError((e instanceof Error && e.message) || t('los.projects.saveError'));
     }
-  }, [newProjectName, state.results, state.mapState]);
+  }, [newProjectName, state.results, state.mapState, t]);
 
   const handleLoadProject = useCallback((project: Project) => {
     loadProject(project);
@@ -75,18 +69,18 @@ export default function ProjectPanel() {
       deleteProjectFromLocal(id);
       setProjects(prev => prev.filter(p => p.id !== id));
       setStorageInfo(getStorageInfo());
-    } catch (e: any) {
-      setError(e.message || t('los.projects.deleteError'));
+    } catch (e) {
+      setError((e instanceof Error && e.message) || t('los.projects.deleteError'));
     }
-  }, []);
+  }, [t]);
 
   const handleExportProject = useCallback((project: Project) => {
     try {
       exportProjectToFile(project);
-    } catch (e: any) {
-      setError(e.message || t('los.projects.exportError'));
+    } catch (e) {
+      setError((e instanceof Error && e.message) || t('los.projects.exportError'));
     }
-  }, []);
+  }, [t]);
 
   const handleImportProject = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -98,15 +92,15 @@ export default function ProjectPanel() {
       setProjects(prev => [...prev, project]);
       setStorageInfo(getStorageInfo());
       setError(null);
-    } catch (e: any) {
-      setError(e.message || t('los.projects.importError'));
+    } catch (e) {
+      setError((e instanceof Error && e.message) || t('los.projects.importError'));
     }
 
     // Reset input
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, []);
+  }, [t]);
 
   const handleUpdateProject = useCallback((project: Project) => {
     try {
@@ -119,10 +113,10 @@ export default function ProjectPanel() {
       saveProjectToLocal(updatedProject);
       setProjects(prev => prev.map(p => p.id === project.id ? updatedProject : p));
       setStorageInfo(getStorageInfo());
-    } catch (e: any) {
-      setError(e.message || t('los.projects.updateError'));
+    } catch (e) {
+      setError((e instanceof Error && e.message) || t('los.projects.updateError'));
     }
-  }, [state.results, state.mapState]);
+  }, [state.results, state.mapState, t]);
 
   return (
     <div className={styles.container}>
