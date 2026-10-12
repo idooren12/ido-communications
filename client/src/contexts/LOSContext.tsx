@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, useCallback, useRef, useS
 import type { LOSProfilePoint } from '../utils/los/los';
 import type * as maplibregl from 'maplibre-gl';
 import type { RasterResult } from '../utils/los/losAreaRaster';
+import type { LosStatus } from '../utils/los/core/losCore';
 import i18n from '../i18n/config';
 
 // ==================== Types ====================
@@ -48,6 +49,8 @@ export interface GridCell {
   lon: number;
   clear: boolean | null;
   fresnelClear?: boolean | null;
+  /** Full result class (see utils/los/core/losCore.ts). Absent in results saved before it existed. */
+  status?: LosStatus;
   bearing?: number;
   distance?: number;
 }

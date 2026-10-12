@@ -7,10 +7,7 @@
 
 import type { GridCell } from '../../contexts/LOSContext';
 import { metersToDegreesLat, metersToDegreesLon } from './geo';
-
-// Colors for clear/blocked cells (RGBA)
-const COLOR_CLEAR: [number, number, number, number] = [16, 185, 129, 200]; // #10b981 with alpha
-const COLOR_BLOCKED: [number, number, number, number] = [244, 63, 94, 200]; // #f43f5e with alpha
+import type { LosStatus } from './core/losCore';
 
 export interface RasterResult {
   /** Data URL or Blob URL of the PNG image */
@@ -37,11 +34,25 @@ export interface GridBounds {
 /**
  * Pixel state enum for the state machine merge.
  * Merge rule: max(old, incoming) — commutative and associative.
+ * (Grid cells map ~1:1 to pixels; the order only matters at the raster's clamped size.)
  */
 const PIXEL_EMPTY = 0;    // No cell landed on this pixel
-const PIXEL_NO_DATA = 1;  // hasData === false
-const PIXEL_BLOCKED = 2;  // clear === false
-const PIXEL_CLEAR = 3;    // clear === true
+const PIXEL_NO_DATA = 1;
+const PIXEL_BLOCKED = 2;
+const PIXEL_MARGINAL = 3; // blocked by less than the terrain data's accuracy
+const PIXEL_FRESNEL = 4;  // RF: line of sight, Fresnel zone obstructed
+const PIXEL_CLEAR = 5;
+
+/** Map colours, shared with the legend and the line tool's status badge. */
+export const LOS_STATUS_COLORS: Record<Exclude<LosStatus, 'nodata'>, string> = {
+  clear: '#10b981',
+  fresnel: '#eab308',
+  marginal: '#f97316',
+  blocked: '#f43f5e',
+};
+
+export const losStatusColor = (status: LosStatus): string =>
+  status === 'nodata' ? '#94a3b8' : LOS_STATUS_COLORS[status];
 
 /**
  * Color LUT: state → RGBA. NOT part of determinism contract.
@@ -51,13 +62,29 @@ const STATE_COLORS: readonly (readonly [number, number, number, number])[] = [
   [0, 0, 0, 0],          // EMPTY: transparent
   [128, 128, 128, 100],   // NO_DATA: gray semi-transparent
   [244, 63, 94, 200],     // BLOCKED: red
+  [249, 115, 22, 200],    // MARGINAL: orange
+  [234, 179, 8, 200],     // FRESNEL: yellow
   [16, 185, 129, 200],    // CLEAR: green
 ] as const;
+
+function cellState(cell: { status?: LosStatus; clear: boolean | null; hasData?: boolean }): number {
+  switch (cell.status) {
+    case 'clear': return PIXEL_CLEAR;
+    case 'fresnel': return PIXEL_FRESNEL;
+    case 'marginal': return PIXEL_MARGINAL;
+    case 'blocked': return PIXEL_BLOCKED;
+    case 'nodata': return PIXEL_NO_DATA;
+  }
+  // Results saved before statuses existed
+  if (cell.hasData === false) return PIXEL_NO_DATA;
+  return cell.clear === true ? PIXEL_CLEAR : cell.clear === false ? PIXEL_BLOCKED : PIXEL_NO_DATA;
+}
 
 /** Input cell type for streaming paint */
 export interface RasterCell {
   lat: number;
   lon: number;
+  status?: LosStatus;
   clear: boolean | null;
   fresnelClear?: boolean | null;
   hasData: boolean;
@@ -116,6 +143,8 @@ export function computeRasterMapping(bounds: GridBounds, resolution: number, max
 export interface CellStats {
   total: number;
   clear: number;
+  fresnel: number;
+  marginal: number;
   blocked: number;
   noData: number;
 }
@@ -145,7 +174,7 @@ export class StreamingRasterCanvas {
   dirty = false;
   dirtyCells = 0;
   dirtyPixels = 0;
-  private cellStats: CellStats = { total: 0, clear: 0, blocked: 0, noData: 0 };
+  private cellStats: CellStats = { total: 0, clear: 0, fresnel: 0, marginal: 0, blocked: 0, noData: 0 };
 
   constructor(bounds: GridBounds, resolution: number, maxDim = 4096) {
     this.mapping = computeRasterMapping(bounds, resolution, maxDim);
@@ -185,13 +214,12 @@ export class StreamingRasterCanvas {
 
     for (let i = 0; i < cells.length; i++) {
       const cell = cells[i];
-      const incoming = !cell.hasData ? PIXEL_NO_DATA
-        : cell.clear === true ? PIXEL_CLEAR
-        : cell.clear === false ? PIXEL_BLOCKED
-        : PIXEL_NO_DATA;
+      const incoming = cellState(cell);
 
       // Cell-level stats (exact, not pixel-dependent)
       if (incoming === PIXEL_CLEAR) this.cellStats.clear++;
+      else if (incoming === PIXEL_FRESNEL) this.cellStats.fresnel++;
+      else if (incoming === PIXEL_MARGINAL) this.cellStats.marginal++;
       else if (incoming === PIXEL_BLOCKED) this.cellStats.blocked++;
       else this.cellStats.noData++;
       this.cellStats.total++;
@@ -231,14 +259,6 @@ export class StreamingRasterCanvas {
 
     this.dirty = true;
     this.dirtyCells += packed.length;
-  }
-
-  /** Update cell-level stats from a packed batch (caller must track separately) */
-  updateCellStats(clear: number, blocked: number, noData: number): void {
-    this.cellStats.clear += clear;
-    this.cellStats.blocked += blocked;
-    this.cellStats.noData += noData;
-    this.cellStats.total += clear + blocked + noData;
   }
 
   /** Flush stateBuffer to PNG Blob URL. Single-flight: max 1 concurrent encode. */
@@ -316,17 +336,17 @@ export class StreamingRasterCanvas {
   }
 
   /** Get pixel-level statistics (for debugging) */
-  getPixelStats(): { empty: number; noData: number; blocked: number; clear: number } {
-    let empty = 0, noData = 0, blocked = 0, clear = 0;
-    for (let i = 0; i < this.stateBuffer.length; i++) {
-      switch (this.stateBuffer[i]) {
-        case PIXEL_EMPTY: empty++; break;
-        case PIXEL_NO_DATA: noData++; break;
-        case PIXEL_BLOCKED: blocked++; break;
-        case PIXEL_CLEAR: clear++; break;
-      }
-    }
-    return { empty, noData, blocked, clear };
+  getPixelStats(): { empty: number; noData: number; blocked: number; marginal: number; fresnel: number; clear: number } {
+    const counts = [0, 0, 0, 0, 0, 0];
+    for (let i = 0; i < this.stateBuffer.length; i++) counts[this.stateBuffer[i]]++;
+    return {
+      empty: counts[PIXEL_EMPTY],
+      noData: counts[PIXEL_NO_DATA],
+      blocked: counts[PIXEL_BLOCKED],
+      marginal: counts[PIXEL_MARGINAL],
+      fresnel: counts[PIXEL_FRESNEL],
+      clear: counts[PIXEL_CLEAR],
+    };
   }
 
   /** Get last flushed result (for saving) */
@@ -445,7 +465,7 @@ function render(
     if (px < 0 || px >= width || py < 0 || py >= height) continue;
 
     const idx = (py * width + px) * 4;
-    const color = cell.clear ? COLOR_CLEAR : COLOR_BLOCKED;
+    const color = STATE_COLORS[cellState(cell)];
     data[idx] = color[0];
     data[idx + 1] = color[1];
     data[idx + 2] = color[2];
@@ -498,7 +518,7 @@ function renderScaled(
     if (px < 0 || px >= width || py < 0 || py >= height) continue;
 
     const idx = (py * width + px) * 4;
-    const color = cell.clear ? COLOR_CLEAR : COLOR_BLOCKED;
+    const color = STATE_COLORS[cellState(cell)];
     data[idx] = color[0];
     data[idx + 1] = color[1];
     data[idx + 2] = color[2];

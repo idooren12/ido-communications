@@ -12,6 +12,9 @@
 import { TERRAIN_CONFIG } from './constants';
 import { type GridConfig, generatePointChunks, computeBounds, estimateTotalPoints, computeZoom } from './gridGenerator';
 import type { RasterCell, GridBounds } from './losAreaRaster';
+import { tileKeysForBounds, boundsOf, demZoomForExtent, type DemLayer } from './core/terrain';
+import { haversineMeters, type LosStatus } from './core/losCore';
+import { fetchTerrariumTile } from './core/tileLoader';
 import i18n from '../../i18n/config';
 
 // ============================================================================
@@ -50,6 +53,10 @@ export interface TaskConfig {
 export interface StreamingSummary {
   totalProcessed: number;
   clear: number;
+  /** RF: line of sight, but the Fresnel zone is obstructed. */
+  fresnel: number;
+  /** Blocked by less than the terrain data's accuracy. */
+  marginal: number;
   blocked: number;
   noData: number;
   durationMs: number;
@@ -60,6 +67,7 @@ export interface StreamingSummary {
 export interface WorkerPointResult {
   lat: number;
   lon: number;
+  status?: LosStatus;
   clear?: boolean | null;
   fresnelClear?: boolean | null;
   hasData?: boolean;
@@ -91,150 +99,14 @@ const DEFAULT_CHUNK_SIZE = 5000;
 const MAX_WORKERS = Math.min(typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4, 16);
 const MAX_POINTS = 500000000;
 const TILE_CACHE_SIZE = 2000;
-const TILE_RETRY_COUNT = 3;
-const TILE_RETRY_DELAY = 500;
 const TILE_BATCH_SIZE = 20;
-
-// ============================================================================
-// Worker Code
-// ============================================================================
-
-function createWorkerCode(): string {
-  return `
-const EARTH_RADIUS = 6371000.0;
-const K_FACTOR = 1.333333;
-const SPEED_OF_LIGHT = 299792458.0;
-const DEG_TO_RAD = Math.PI / 180;
-const RAD_TO_DEG = 180 / Math.PI;
-
-let tileCache = new Map();
-
-function lngLatToTile(lng, lat, zoom) {
-  const n = Math.pow(2, zoom);
-  lat = Math.max(-85.05, Math.min(85.05, lat));
-  const latRad = lat * DEG_TO_RAD;
-  const tileX = Math.floor(((lng + 180) / 360) * n);
-  const tileY = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-  const xInTile = ((lng + 180) / 360) * n - tileX;
-  const yInTile = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n - tileY;
-  return {
-    tileX: Math.max(0, Math.min(n-1, tileX)),
-    tileY: Math.max(0, Math.min(n-1, tileY)),
-    pixelX: Math.min(255, Math.max(0, Math.floor(xInTile * 256))),
-    pixelY: Math.min(255, Math.max(0, Math.floor(yInTile * 256)))
-  };
-}
-
-function getElevation(lat, lng, zoom) {
-  const { tileX, tileY, pixelX, pixelY } = lngLatToTile(lng, lat, zoom);
-  const key = zoom + '/' + tileX + '/' + tileY;
-  const data = tileCache.get(key);
-  if (!data) return null;
-  const idx = (pixelY * 256 + pixelX) * 4;
-  if (data[idx + 3] === 0) return null;
-  const elev = (data[idx] * 256 + data[idx + 1] + data[idx + 2] / 256) - 32768;
-  return (elev < -500 || elev > 9000) ? null : elev;
-}
-
-function haversine(lat1, lon1, lat2, lon2) {
-  const dLat = (lat2 - lat1) * DEG_TO_RAD;
-  const dLon = (lon2 - lon1) * DEG_TO_RAD;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-            Math.cos(lat1 * DEG_TO_RAD) * Math.cos(lat2 * DEG_TO_RAD) *
-            Math.sin(dLon/2) * Math.sin(dLon/2);
-  return EARTH_RADIUS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-}
-
-function interpolate(lat1, lon1, lat2, lon2, f) {
-  const phi1 = lat1 * DEG_TO_RAD, lam1 = lon1 * DEG_TO_RAD;
-  const phi2 = lat2 * DEG_TO_RAD, lam2 = lon2 * DEG_TO_RAD;
-  const dPhi = phi2 - phi1, dLam = lam2 - lam1;
-  const a = Math.sin(dPhi/2) * Math.sin(dPhi/2) + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLam/2) * Math.sin(dLam/2);
-  const d = 2 * Math.asin(Math.sqrt(a));
-  if (d < 1e-10) return { lat: lat1, lon: lon1 };
-  const A = Math.sin((1-f)*d) / Math.sin(d);
-  const B = Math.sin(f*d) / Math.sin(d);
-  const x = A * Math.cos(phi1) * Math.cos(lam1) + B * Math.cos(phi2) * Math.cos(lam2);
-  const y = A * Math.cos(phi1) * Math.sin(lam1) + B * Math.cos(phi2) * Math.sin(lam2);
-  const z = A * Math.sin(phi1) + B * Math.sin(phi2);
-  return { lat: Math.atan2(z, Math.sqrt(x*x + y*y)) * RAD_TO_DEG, lon: Math.atan2(y, x) * RAD_TO_DEG };
-}
-
-function calcLOS(origin, target, zoom, freqMHz) {
-  const dist = haversine(origin.lat, origin.lon, target.lat, target.lon);
-  if (dist < 1) return { clear: true, fresnelClear: true, distance: dist, hasData: true };
-
-  const oElev = getElevation(origin.lat, origin.lon, zoom);
-  const tElev = getElevation(target.lat, target.lon, zoom);
-
-  if (oElev === null && tElev === null) {
-    return { clear: null, fresnelClear: null, distance: dist, hasData: false };
-  }
-
-  const samples = 200;
-  const wl = freqMHz ? SPEED_OF_LIGHT / (freqMHz * 1e6) : null;
-
-  const startH = (oElev || 0) + (origin.height || 0);
-  const endH = (tElev || 0) + (target.height || 2);
-
-  let clear = true, fresnelClear = true;
-  let hasAnyData = oElev !== null || tElev !== null;
-
-  for (let i = 1; i < samples; i++) {
-    const f = i / samples;
-    const d1 = dist * f, d2 = dist - d1;
-    const p = interpolate(origin.lat, origin.lon, target.lat, target.lon, f);
-    const gnd = getElevation(p.lat, p.lon, zoom);
-
-    if (gnd === null) continue;
-    hasAnyData = true;
-
-    const curve = (d1 * d2) / (2 * EARTH_RADIUS * K_FACTOR);
-    const losH = startH + (endH - startH) * f - curve;
-    const clr = losH - gnd;
-
-    if (clr < 0) { clear = false; break; }
-    if (wl && fresnelClear && clr < Math.sqrt(wl * d1 * d2 / dist) * 0.6) fresnelClear = false;
-  }
-
-  return {
-    clear: hasAnyData ? clear : null,
-    fresnelClear: hasAnyData ? (wl ? fresnelClear : undefined) : null,
-    distance: dist,
-    hasData: hasAnyData
-  };
-}
-
-self.onmessage = async (e) => {
-  const { id, type, payload } = e.data;
-
-  if (type === 'setTiles') {
-    tileCache.clear();
-    for (const [key, arr] of Object.entries(payload)) {
-      tileCache.set(key, new Uint8ClampedArray(arr));
-    }
-    self.postMessage({ id, type: 'ready', payload: { tileCount: tileCache.size } });
-    return;
-  }
-
-  if (type === 'calc') {
-    const { points, origin, targetHeight, zoom, freqMHz } = payload;
-    const results = points.map(p => {
-      const r = calcLOS(origin, { lat: p.lat, lon: p.lon, height: targetHeight }, zoom, freqMHz);
-      return { lat: p.lat, lon: p.lon, ...r };
-    });
-    self.postMessage({ id, type: 'done', payload: results });
-  }
-};
-`;
-}
 
 // ============================================================================
 // Tile Manager with Retry
 // ============================================================================
 
 class TileManager {
-  private cache = new Map<string, ImageData>();
+  private cache = new Map<string, Uint8ClampedArray>();
   private failedTiles = new Set<string>();
   private abortController: AbortController | null = null;
 
@@ -277,58 +149,20 @@ class TileManager {
     const result = new Map<string, Uint8ClampedArray>();
     for (const k of keys) {
       const d = this.cache.get(k);
-      if (d) result.set(k, new Uint8ClampedArray(d.data));
+      if (d) result.set(k, d);
     }
     return result;
   }
 
   private async loadTileWithRetry(key: string, baseUrl: string, parentSignal?: AbortSignal): Promise<boolean> {
-    const [z, x, y] = key.split('/').map(Number);
-    const tileUrl = baseUrl.replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y));
-
-    for (let attempt = 0; attempt < TILE_RETRY_COUNT; attempt++) {
-      if (parentSignal?.aborted) return false;
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
-        // Abort individual fetch if parent is aborted
-        const onAbort = () => controller.abort();
-        parentSignal?.addEventListener('abort', onAbort, { once: true });
-
-        const res = await fetch(tileUrl, { signal: controller.signal });
-        clearTimeout(timeout);
-        parentSignal?.removeEventListener('abort', onAbort);
-
-        if (!res.ok) {
-          if (attempt < TILE_RETRY_COUNT - 1) {
-            await new Promise(r => setTimeout(r, TILE_RETRY_DELAY * (attempt + 1)));
-            continue;
-          }
-          return false;
-        }
-
-        const blob = await res.blob();
-        const bmp = await createImageBitmap(blob);
-        const canvas = new OffscreenCanvas(256, 256);
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(bmp, 0, 0);
-
-        if (this.cache.size >= TILE_CACHE_SIZE) {
-          const first = this.cache.keys().next().value;
-          if (first) this.cache.delete(first);
-        }
-
-        this.cache.set(key, ctx.getImageData(0, 0, 256, 256));
-        return true;
-
-      } catch {
-        if (parentSignal?.aborted) return false;
-        if (attempt < TILE_RETRY_COUNT - 1) {
-          await new Promise(r => setTimeout(r, TILE_RETRY_DELAY * (attempt + 1)));
-        }
-      }
+    const data = await fetchTerrariumTile(key, baseUrl, parentSignal);
+    if (!data) return false;
+    if (this.cache.size >= TILE_CACHE_SIZE) {
+      const first = this.cache.keys().next().value;
+      if (first) this.cache.delete(first);
     }
-    return false;
+    this.cache.set(key, data);
+    return true;
   }
 
   abort() {
@@ -350,15 +184,14 @@ class TileManager {
 
 class WorkerPool {
   private workers: Worker[] = [];
-  private url: string;
 
   constructor(n: number) {
-    const blob = new Blob([createWorkerCode()], { type: 'application/javascript' });
-    this.url = URL.createObjectURL(blob);
-    for (let i = 0; i < n; i++) this.workers.push(new Worker(this.url));
+    for (let i = 0; i < n; i++) {
+      this.workers.push(new Worker(new URL('./workers/areaLosWorker.ts', import.meta.url), { type: 'module' }));
+    }
   }
 
-  async sendTiles(data: Map<string, Uint8ClampedArray>): Promise<number[]> {
+  async sendTiles(data: Map<string, Uint8ClampedArray>, zoom: number, layers: DemLayer[]): Promise<number[]> {
     const obj: Record<string, ArrayBuffer> = {};
     data.forEach((v, k) => { obj[k] = v.slice().buffer as ArrayBuffer; });
 
@@ -372,7 +205,7 @@ class WorkerPool {
         }
       };
       w.addEventListener('message', h);
-      w.postMessage({ id: i, type: 'setTiles', payload: obj });
+      w.postMessage({ id: i, type: 'setTiles', payload: { zoom, tiles: obj, layers } });
     })));
 
     return results;
@@ -388,11 +221,13 @@ class WorkerPool {
         rej(new Error(`Worker ${idx} calculation timeout (5 min)`));
       }, 300000);
       const h = (e: MessageEvent) => {
-        if (e.data.id === id && e.data.type === 'done') {
+        if (e.data.id !== id) return;
+        if (e.data.type === 'done' || e.data.type === 'error') {
           clearTimeout(t);
           w.removeEventListener('message', h);
           w.removeEventListener('error', errH);
-          res(e.data.payload);
+          if (e.data.type === 'done') res(e.data.payload);
+          else rej(new Error(`Worker ${idx} error: ${e.data.payload}`));
         }
       };
       const errH = (e: ErrorEvent) => {
@@ -412,7 +247,6 @@ class WorkerPool {
   terminate() {
     this.workers.forEach(w => w.terminate());
     this.workers = [];
-    URL.revokeObjectURL(this.url);
   }
 }
 
@@ -455,7 +289,7 @@ class Engine {
       zoom = config.zoom || computeZoom(config.gridConfig);
 
       if (totalPoints === 0) {
-        cb.onComplete?.({ mode: streaming ? 'streaming' : 'legacy', ...(streaming ? { summary: { totalProcessed: 0, clear: 0, blocked: 0, noData: 0, durationMs: 0 } } : { results: [] }) } as Completion);
+        cb.onComplete?.({ mode: streaming ? 'streaming' : 'legacy', ...(streaming ? { summary: { totalProcessed: 0, clear: 0, fresnel: 0, marginal: 0, blocked: 0, noData: 0, durationMs: 0 } } : { results: [] }) } as Completion);
         return [];
       }
 
@@ -479,17 +313,22 @@ class Engine {
         throw new Error(err);
       }
 
-      zoom = config.zoom || (totalPoints > 100000 ? 10 : totalPoints > 20000 ? 11 : 12);
+      const o = config.origin;
+      const extent = o ? Math.max(...eagerPoints.map(p => haversineMeters(o.lat, o.lon, p.lat, p.lon))) : 0;
+      zoom = config.zoom || demZoomForExtent(extent);
     }
 
     // ---- Compute tile keys ----
     let tileKeys: string[];
     if (bounds) {
       // From bounds (lazy mode) — compute tile keys from bounding box
-      tileKeys = this.getTileKeysFromBounds(bounds, zoom, config.gridConfig?.origin || config.origin);
+      const o = config.gridConfig?.origin || config.origin;
+      tileKeys = tileKeysForBounds(o ? boundsOf([
+        { lat: bounds.south, lon: bounds.west }, { lat: bounds.north, lon: bounds.east }, o,
+      ]) : bounds, zoom);
     } else {
       // From points (eager mode)
-      tileKeys = this.getTileKeys(eagerPoints!, zoom, config.origin);
+      tileKeys = tileKeysForBounds(boundsOf(config.origin ? [...eagerPoints!, config.origin] : eagerPoints!), zoom);
     }
 
     console.log(`Calculating ~${totalPoints.toLocaleString()} points, need ${tileKeys.length} tiles at zoom ${zoom}`);
@@ -510,11 +349,15 @@ class Engine {
     if (this.cancelled) return [];
 
     // ---- Create worker pool ----
-    const numW = Math.min(MAX_WORKERS, Math.max(2, Math.ceil(totalPoints / 1000)));
+    // Uploaded custom DSM layers override terrain tiles (they used to be ignored here).
+    const layers = await loadCustomLayers();
+    // Each worker gets its own copy of the DSM rasters, so use fewer workers when they exist.
+    const maxWorkers = layers.length > 0 ? Math.min(MAX_WORKERS, 4) : MAX_WORKERS;
+    const numW = Math.min(maxWorkers, Math.max(2, Math.ceil(totalPoints / 1000)));
     this.pool = new WorkerPool(numW);
     console.log(`Using ${numW} workers`);
 
-    const tileCounts = await this.pool.sendTiles(tileData);
+    const tileCounts = await this.pool.sendTiles(tileData, zoom, layers);
     console.log(`Workers received tiles:`, tileCounts);
 
     if (this.cancelled) { this.pool.terminate(); this.pool = null; return []; }
@@ -531,7 +374,7 @@ class Engine {
     // Legacy mode: accumulate in allResults[], call onPartialResult periodically
     const allResults: WorkerPointResult[] = []; // legacy: accumulates; streaming: stays empty
     let done = 0;
-    let streamClear = 0, streamBlocked = 0, streamNoData = 0;
+    let streamClear = 0, streamFresnel = 0, streamMarginal = 0, streamBlocked = 0, streamNoData = 0;
 
     const chunkSize = config.chunkSize || (totalPoints > 1000000 ? 10000 : DEFAULT_CHUNK_SIZE);
 
@@ -596,17 +439,20 @@ class Engine {
               const cell: RasterCell = {
                 lat: r.lat,
                 lon: r.lon,
+                status: r.status,
                 clear: r.clear ?? null,
                 fresnelClear: r.fresnelClear ?? null,
                 hasData: r.hasData !== false,
               };
               rasterBatch.push(cell);
 
-              // Track stats
-              if (!cell.hasData) streamNoData++;
-              else if (cell.clear === true) streamClear++;
-              else if (cell.clear === false) streamBlocked++;
-              else streamNoData++; // clear === null with hasData — shouldn't happen, but safe
+              switch (r.status) {
+                case 'clear': streamClear++; break;
+                case 'fresnel': streamFresnel++; break;
+                case 'marginal': streamMarginal++; break;
+                case 'blocked': streamBlocked++; break;
+                default: streamNoData++;
+              }
             }
 
             if (rasterBatch.length > 0 && !this.cancelled) {
@@ -679,11 +525,13 @@ class Engine {
         const summary: StreamingSummary = {
           totalProcessed: actualTotal,
           clear: streamClear,
+          fresnel: streamFresnel,
+          marginal: streamMarginal,
           blocked: streamBlocked,
           noData: streamNoData,
           durationMs,
         };
-        console.log(`Streaming done: ${actualTotal.toLocaleString()} points, ${streamClear} clear, ${streamBlocked} blocked, ${streamNoData} noData, ${(durationMs / 1000).toFixed(1)}s`);
+        console.log(`Streaming done: ${actualTotal.toLocaleString()} points, ${streamClear} clear, ${streamFresnel} fresnel, ${streamMarginal} marginal, ${streamBlocked} blocked, ${streamNoData} noData, ${(durationMs / 1000).toFixed(1)}s`);
         // Await onComplete so the consumer can do final flush before we return
         await cb.onComplete?.({ mode: 'streaming', summary });
       } else {
@@ -744,74 +592,6 @@ class Engine {
     return { lat: p2 * 180 / Math.PI, lon: ((l2 * 180 / Math.PI) + 540) % 360 - 180 };
   }
 
-  private getTileKeysFromBounds(bounds: GridBounds, z: number, origin?: { lat: number; lon: number; height: number }): string[] {
-    const n = Math.pow(2, z);
-
-    let minLat = bounds.south, maxLat = bounds.north;
-    let minLon = bounds.west, maxLon = bounds.east;
-    if (origin) {
-      if (origin.lat < minLat) minLat = origin.lat;
-      if (origin.lat > maxLat) maxLat = origin.lat;
-      if (origin.lon < minLon) minLon = origin.lon;
-      if (origin.lon > maxLon) maxLon = origin.lon;
-    }
-
-    const toTile = (lat: number, lon: number) => {
-      lat = Math.max(-85.05, Math.min(85.05, lat));
-      const latRad = lat * Math.PI / 180;
-      const tx = Math.floor(((lon + 180) / 360) * n);
-      const ty = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-      return { tx: Math.max(0, Math.min(n - 1, tx)), ty: Math.max(0, Math.min(n - 1, ty)) };
-    };
-
-    const tl = toTile(maxLat, minLon);
-    const br = toTile(minLat, maxLon);
-
-    const keys: string[] = [];
-    for (let tx = tl.tx; tx <= br.tx; tx++) {
-      for (let ty = tl.ty; ty <= br.ty; ty++) {
-        keys.push(`${z}/${tx}/${ty}`);
-      }
-    }
-    return keys;
-  }
-
-  private getTileKeys(pts: Array<{ lat: number; lon: number }>, z: number, origin?: { lat: number; lon: number }): string[] {
-    const n = Math.pow(2, z);
-
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    for (const p of pts) {
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-      if (p.lon < minLon) minLon = p.lon;
-      if (p.lon > maxLon) maxLon = p.lon;
-    }
-    if (origin) {
-      if (origin.lat < minLat) minLat = origin.lat;
-      if (origin.lat > maxLat) maxLat = origin.lat;
-      if (origin.lon < minLon) minLon = origin.lon;
-      if (origin.lon > maxLon) maxLon = origin.lon;
-    }
-
-    const toTile = (lat: number, lon: number) => {
-      lat = Math.max(-85.05, Math.min(85.05, lat));
-      const latRad = lat * Math.PI / 180;
-      const tx = Math.floor(((lon + 180) / 360) * n);
-      const ty = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
-      return { tx: Math.max(0, Math.min(n - 1, tx)), ty: Math.max(0, Math.min(n - 1, ty)) };
-    };
-
-    const tl = toTile(maxLat, minLon);
-    const br = toTile(minLat, maxLon);
-
-    const keys: string[] = [];
-    for (let tx = tl.tx; tx <= br.tx; tx++) {
-      for (let ty = tl.ty; ty <= br.ty; ty++) {
-        keys.push(`${z}/${tx}/${ty}`);
-      }
-    }
-    return keys;
-  }
 }
 
 // ============================================================================
@@ -828,3 +608,12 @@ export async function smartCalculate(config: TaskConfig, cb: EngineCallbacks = {
   return getMassiveEngine().calculate(config, cb);
 }
 
+/** Uploaded custom DSM layers (empty when none are loaded). */
+async function loadCustomLayers(): Promise<DemLayer[]> {
+  try {
+    const dsm = await import('./customDSM');
+    return dsm.getCustomLayers();
+  } catch {
+    return [];
+  }
+}

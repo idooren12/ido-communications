@@ -362,7 +362,7 @@
 
 .resultStats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
   gap: var(--space-2);
   margin-bottom: var(--space-2);
 }
@@ -389,6 +389,13 @@
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.legendNote {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
 
 .calcTime {
