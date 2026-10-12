@@ -10,7 +10,8 @@
 ## server (Render)
 | שם | מטרה | איפה מוגדר |
 |---|---|---|
-| `DATABASE_URL` | חיבור ל־Neon Postgres | Render → `ido-communications-api` → Environment |
+| `DATABASE_URL` | חיבור ל־Neon Postgres דרך ה־pooler (לאפליקציה) | Render → `ido-communications-api` → Environment |
+| `DIRECT_URL` | חיבור ישיר ל־Neon (בלי `-pooler` בכתובת), עבור `prisma migrate` / `db push` | Render (הוגדר 2026-10-12) |
 | `JWT_SECRET` | חתימת טוקנים. **חובה ב־production**: בלעדיו השרת לא עולה | Render |
 | `FRONTEND_URL` | מקורות מורשים ל־CORS, מופרדים בפסיק. ברירת מחדל: `https://ido-communications.vercel.app`. כתובות preview של הפרויקט ב־Vercel מורשות תמיד | Render |
 | `OPENWEATHERMAP_API_KEY` | נתוני מזג אוויר (`routes/weather.ts`) | Render |

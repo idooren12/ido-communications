@@ -35,5 +35,22 @@
 ### 2026-10-12: MapLibre 6
 - **החלטה:** שדרוג ל־6.14 בגלל פגיעות XSS קריטית ב־5.x. v6 הוא ESM בלבד ודורש WebGL2 (כל הדפדפנים המודרניים).
 
-### 2026-10-12: פתוח: פגיעויות ב־Prisma CLI
+### 2026-10-12: פגיעויות ב־Prisma CLI (הוחלף ב־"overrides" למטה)
 - `npm audit` בשרת מדווח high על `prisma`/`@prisma/config` (תלויות של ה־CLI, רצות רק ב־build). התיקון דורש Prisma 8, שדרוג גדול. טרם בוצע.
+
+### 2026-10-12: overrides במקום שדרוג Prisma
+- **החלטה:** הפגיעויות ב־Prisma CLI (`effect`, `deepmerge-ts` דרך `@prisma/config`) נסגרו עם `overrides` ב־`server/package.json`, לא בשדרוג.
+- **למה:** אף גרסה יציבה של Prisma עוד לא מתקנת אותן (7.10 פגיעה, 8 עדיין RC), ושדרוג ל־7/8 מחייב driver adapters ו־`prisma.config.ts`. `@prisma/config` משתמש רק ב־`deepmerge()`, שלא השתנה ב־deepmerge-ts 8.
+- **לבדוק בעתיד:** כש־Prisma 8 יציא גרסה יציבה, לשדרג ולהסיר את ה־overrides.
+
+### 2026-10-12: Node 24 בכל מקום
+- `engines.node: 24.x` ב־client וב־server. Render בנה עד עכשיו על Node 22 (ברירת המחדל שלו), בזמן ש־Vercel ו־CI על 24.
+
+### 2026-10-12: migrations במקום db push
+- **החלטה:** `server/prisma/migrations` הוא מקור האמת לסכמה. ה־baseline `0_init` סומן כ־applied ב־Neon (נבדק: אין הבדל בין ה־DB לסכמה, והקובץ זהה לפלט של `migrate diff`).
+- `directUrl = env("DIRECT_URL")`: ה־pooler של Neon (pgbouncer) לא מחזיק advisory locks של session, ש־`prisma migrate` צריך.
+- **פתוח:** פקודת ה־build ב־Render עדיין מריצה `prisma db push` (לא ניתן לשנות אותה דרך הכלים שזמינים לי). צריך לשנות ידנית ב־Render ל־`npm install && npx prisma generate && npx prisma migrate deploy && npm run build`. עד אז שני המצבים עובדים (נבדק: `db push` מדווח "already in sync").
+
+### 2026-10-12: פיצול UnifiedMap
+- `UnifiedMap.tsx` (1,098 שורות) פוצל ל־`components/LOS/map/`: `mapSetup.ts` ו־hooks לפי תחום (חיפוש, מדידה, פוליגון גבהים, previews, תוצאות, raster). הקוד הועבר כמו שהוא, בלי שינוי התנהגות.
+
