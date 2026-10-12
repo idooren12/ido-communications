@@ -1,12 +1,11 @@
 import { Router } from 'express';
+import { TtlCache } from '../lib/ttlCache';
+import { weatherLimiter } from '../lib/rateLimits';
+import { formatZodError, weatherQuerySchema } from '../lib/validation';
 
 const router = Router();
 
-// In-memory cache: key = "lat,lon" (rounded to 2 decimals), value = { data, timestamp }
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-const cache = new Map<string, { data: WeatherResponse; timestamp: number }>();
-
-interface WeatherResponse {
+export interface WeatherResponse {
   temperature: number;
   humidity: number;
   windSpeed: number;
@@ -16,39 +15,48 @@ interface WeatherResponse {
   icon: string;
 }
 
-// GET /api/weather?lat=32.08&lon=34.78
-// Public endpoint — no auth required
-router.get('/', async (req, res) => {
-  const lat = parseFloat(req.query.lat as string);
-  const lon = parseFloat(req.query.lon as string);
+const CACHE_TTL_MS = 30 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 1000;
+const FETCH_TIMEOUT_MS = 8000;
 
-  if (isNaN(lat) || isNaN(lon)) {
-    return res.status(400).json({ error: 'lat and lon query parameters are required' });
+const cache = new TtlCache<WeatherResponse>(CACHE_TTL_MS, CACHE_MAX_ENTRIES);
+
+// GET /api/weather?lat=32.08&lon=34.78 — public, no auth.
+router.get('/', weatherLimiter, async (req, res) => {
+  const parsed = weatherQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: formatZodError(parsed.error) });
+    return;
   }
 
-  // Round to 2 decimals for cache key
-  const cacheKey = `${lat.toFixed(2)},${lon.toFixed(2)}`;
+  // Round to ~1 km. The same rounded coordinates are used for the cache key and the
+  // upstream request, so every cached answer belongs exactly to its key.
+  const lat = parsed.data.lat.toFixed(2);
+  const lon = parsed.data.lon.toFixed(2);
+  const cacheKey = `${lat},${lon}`;
 
-  // Check cache
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return res.json(cached.data);
+  if (cached) {
+    res.json(cached);
+    return;
   }
 
-  // Fetch from OpenWeatherMap
   const apiKey = process.env.OPENWEATHERMAP_API_KEY;
   if (!apiKey) {
-    return res.status(503).json({ error: 'Weather service not configured' });
+    res.status(503).json({ error: 'Weather service not configured' });
+    return;
   }
 
   try {
-    const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric`;
-    const response = await fetch(url);
+    const url = new URL('https://api.openweathermap.org/data/2.5/weather');
+    url.search = new URLSearchParams({ lat, lon, appid: apiKey, units: 'metric' }).toString();
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
 
     if (!response.ok) {
-      const text = await response.text();
-      console.error(`OpenWeatherMap error: ${response.status} ${text}`);
-      return res.status(503).json({ error: 'Weather service temporarily unavailable' });
+      console.error(`OpenWeatherMap error: HTTP ${response.status}`);
+      res.status(503).json({ error: 'Weather service temporarily unavailable' });
+      return;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -64,13 +72,11 @@ router.get('/', async (req, res) => {
       icon: raw.weather?.[0]?.icon ?? '01d',
     };
 
-    // Store in cache
-    cache.set(cacheKey, { data, timestamp: Date.now() });
-
-    return res.json(data);
+    cache.set(cacheKey, data);
+    res.json(data);
   } catch (err) {
-    console.error('Weather fetch error:', err);
-    return res.status(503).json({ error: 'Failed to fetch weather data' });
+    console.error('Weather fetch error:', err instanceof Error ? err.message : err);
+    res.status(503).json({ error: 'Failed to fetch weather data' });
   }
 });
 

@@ -1,109 +1,60 @@
 import { Router, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
+import { createAntennaSchema, updateAntennaSchema, validateBody } from '../lib/validation';
+import type { z } from 'zod';
 
 const router = Router();
-const prisma = new PrismaClient();
 
-// All antenna routes require authentication
 router.use(authenticateToken);
 
-// List user's antennas
 router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const antennas = await prisma.antenna.findMany({
-      where: { userId: req.userId },
-      orderBy: { createdAt: 'desc' }
-    });
-    res.json({ antennas });
-  } catch (error) {
-    console.error('List antennas error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
+  const antennas = await prisma.antenna.findMany({
+    where: { userId: req.userId },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json({ antennas });
 });
 
-// Create antenna
-router.post('/', async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { name, powerWatts, gainDbi, frequencyMhz, notes } = req.body;
+router.post('/', validateBody(createAntennaSchema), async (req: AuthRequest, res: Response): Promise<void> => {
+  const data = req.body as z.infer<typeof createAntennaSchema>;
 
-    if (!name || powerWatts === undefined || gainDbi === undefined) {
-      res.status(400).json({ error: 'Name, power, and gain are required' });
-      return;
-    }
+  const antenna = await prisma.antenna.create({
+    data: { ...data, userId: req.userId! },
+  });
 
-    const antenna = await prisma.antenna.create({
-      data: {
-        name,
-        powerWatts: parseFloat(powerWatts),
-        gainDbi: parseFloat(gainDbi),
-        ...(frequencyMhz !== undefined && { frequencyMhz: parseFloat(frequencyMhz) }),
-        ...(notes !== undefined && { notes }),
-        userId: req.userId!
-      }
-    });
-
-    res.status(201).json({ antenna });
-  } catch (error) {
-    console.error('Create antenna error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
+  res.status(201).json({ antenna });
 });
 
-// Update antenna
-router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const id = req.params.id as string;
-    const { name, powerWatts, gainDbi, frequencyMhz, notes } = req.body;
+router.put('/:id', validateBody(updateAntennaSchema), async (req: AuthRequest, res: Response): Promise<void> => {
+  const data = req.body as z.infer<typeof updateAntennaSchema>;
 
-    // Verify ownership
-    const existing = await prisma.antenna.findFirst({
-      where: { id, userId: req.userId as string }
-    });
+  // updateMany scopes the write to the owner in a single query.
+  const { count } = await prisma.antenna.updateMany({
+    where: { id: String(req.params.id), userId: req.userId },
+    data,
+  });
 
-    if (!existing) {
-      res.status(404).json({ error: 'Antenna not found' });
-      return;
-    }
-
-    const antenna = await prisma.antenna.update({
-      where: { id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(powerWatts !== undefined && { powerWatts: parseFloat(powerWatts) }),
-        ...(gainDbi !== undefined && { gainDbi: parseFloat(gainDbi) }),
-        ...(frequencyMhz !== undefined && { frequencyMhz: frequencyMhz === null ? null : parseFloat(frequencyMhz) }),
-        ...(notes !== undefined && { notes: notes === null ? null : notes })
-      }
-    });
-
-    res.json({ antenna });
-  } catch (error) {
-    console.error('Update antenna error:', error);
-    res.status(500).json({ error: 'Server error' });
+  if (count === 0) {
+    res.status(404).json({ error: 'Antenna not found' });
+    return;
   }
+
+  const antenna = await prisma.antenna.findUnique({ where: { id: String(req.params.id) } });
+  res.json({ antenna });
 });
 
-// Delete antenna
 router.delete('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const id = req.params.id as string;
+  const { count } = await prisma.antenna.deleteMany({
+    where: { id: String(req.params.id), userId: req.userId },
+  });
 
-    const existing = await prisma.antenna.findFirst({
-      where: { id, userId: req.userId as string }
-    });
-
-    if (!existing) {
-      res.status(404).json({ error: 'Antenna not found' });
-      return;
-    }
-
-    await prisma.antenna.delete({ where: { id } });
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Delete antenna error:', error);
-    res.status(500).json({ error: 'Server error' });
+  if (count === 0) {
+    res.status(404).json({ error: 'Antenna not found' });
+    return;
   }
+
+  res.json({ success: true });
 });
 
 export default router;
