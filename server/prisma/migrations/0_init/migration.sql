@@ -2,6 +2,9 @@
 -- On an existing database mark it as applied instead of running it:
 --   npx prisma migrate resolve --applied 0_init
 
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
 -- CreateTable
 CREATE TABLE "User" (
     "id" TEXT NOT NULL,
