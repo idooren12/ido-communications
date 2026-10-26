@@ -192,9 +192,10 @@ export class StreamingRasterCanvas {
   private readonly visBest: Uint8Array | null;
   private readonly blkBest: Uint8Array | null;
   private readonly dataCount: Uint8Array | null;
-  private imageData: ImageData;
-  private canvas: OffscreenCanvas | HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  /** Created on the first flush, so painting works (and is testable) without a canvas. */
+  private imageData: ImageData | null = null;
+  private canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 
   private isFlushing = false;
   private flushPending = false;
@@ -215,7 +216,11 @@ export class StreamingRasterCanvas {
     this.visBest = aggregated ? new Uint8Array(n) : null;
     this.blkBest = aggregated ? new Uint8Array(n) : null;
     this.dataCount = aggregated ? new Uint8Array(n) : null;
+  }
 
+  private ensureCanvas() {
+    if (this.canvas && this.ctx && this.imageData) return { canvas: this.canvas, ctx: this.ctx, imageData: this.imageData };
+    const { W, H } = this.geometry;
     if (typeof OffscreenCanvas !== 'undefined') {
       this.canvas = new OffscreenCanvas(W, H);
     } else {
@@ -227,6 +232,7 @@ export class StreamingRasterCanvas {
     this.ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
     if (!this.ctx) throw new Error('Could not get canvas context');
     this.imageData = this.ctx.createImageData(W, H);
+    return { canvas: this.canvas, ctx: this.ctx, imageData: this.imageData };
   }
 
   getGeometry(): RasterGeometry {
@@ -281,8 +287,9 @@ export class StreamingRasterCanvas {
     this.dirtyCells = 0;
 
     const g = this.geometry;
-    buildRgba(this.stateBuffer, g, this.imageData.data);
-    this.ctx.putImageData(this.imageData, 0, 0);
+    const { canvas, ctx, imageData } = this.ensureCanvas();
+    buildRgba(this.stateBuffer, g, imageData.data);
+    ctx.putImageData(imageData, 0, 0);
 
     if (this.currentBlobUrl) {
       URL.revokeObjectURL(this.currentBlobUrl);
@@ -290,14 +297,13 @@ export class StreamingRasterCanvas {
     }
 
     let url: string;
-    if (typeof OffscreenCanvas !== 'undefined' && this.canvas instanceof OffscreenCanvas) {
-      const blob = await this.canvas.convertToBlob({ type: 'image/png' });
+    if (typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas) {
+      const blob = await canvas.convertToBlob({ type: 'image/png' });
       url = URL.createObjectURL(blob);
     } else {
+      const html = canvas as HTMLCanvasElement;
       url = await new Promise<string>((resolve) => {
-        (this.canvas as HTMLCanvasElement).toBlob((blob) => {
-          resolve(blob ? URL.createObjectURL(blob) : (this.canvas as HTMLCanvasElement).toDataURL('image/png'));
-        }, 'image/png');
+        html.toBlob((blob) => resolve(blob ? URL.createObjectURL(blob) : html.toDataURL('image/png')), 'image/png');
       });
     }
 

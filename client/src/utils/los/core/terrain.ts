@@ -243,6 +243,12 @@ function layerPixel(pl: PreparedLayer, lng: number, lat: number, out: { fx: numb
 
 const scratchPx = { fx: 0, fy: 0 };
 
+/** Fractional raster pixel of a lon/lat in a layer (pixel edges at integers), or null outside. For tests and tools. */
+export function demLayerPixel(layer: DemLayer, lng: number, lat: number): { fx: number; fy: number } | null {
+  const out = { fx: 0, fy: 0 };
+  return layerPixel(prepareDemLayer(layer), lng, lat, out) ? out : null;
+}
+
 function samplePrepared(pl: PreparedLayer, lng: number, lat: number): number | null {
   if (!layerPixel(pl, lng, lat, scratchPx)) return null;
   const { width, height, data, noDataValue } = pl.layer;

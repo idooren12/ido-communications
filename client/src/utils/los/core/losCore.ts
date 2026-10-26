@@ -228,7 +228,7 @@ export function evaluateLOS(sampler: TerrainSampler, a: LosEndpoint, b: LosEndpo
     const ground = sampler.sample(gx, gy, s).value;
     const bulge = d1 * d2;
     const losHeight = h1 + (h2 - h1) * f - bulge / curvatureDenominator;
-    const fresnelRadius = lambda ? Math.sqrt((lambda * bulge) / distance) : undefined;
+    const fresnelRadius = lambda ? (distance > 0 ? Math.sqrt((lambda * bulge) / distance) : 0) : undefined;
 
     if (ground === null) {
       missing++;
