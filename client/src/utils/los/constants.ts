@@ -49,12 +49,14 @@ export const ELEVATION_GRADIENT_STOPS = [
   { elevation: 2000, color: '#ff1744' },
 ];
 
-// Atmospheric refraction K-factors for LOS calculations
+// Atmospheric refraction factors k (effective Earth radius = k * R). Source of truth: utils/los/los.ts.
+// k > 1: the ray bends with the Earth (sees further); k < 1: sub-refraction (sees less).
 export const K_FACTORS = {
-  standard: 1.33,   // 4/3 Earth radius, standard atmosphere
-  minimum: 0.67,    // Super-refraction (unusual)
-  maximum: 4.0,     // Sub-refraction (unusual)
-  none: 1.0,        // No refraction correction
+  standard: 4 / 3,          // radio, standard atmosphere
+  optical: 1 / (1 - 0.13),  // visible light (~1.15)
+  none: 1.0,                // no refraction
+  worst: 2 / 3,             // sub-refraction, microwave design worst case
+  ducting: 4.0,             // strong super-refraction (unusual)
 };
 
 // Terrain data source configuration
@@ -64,7 +66,7 @@ export const TERRAIN_CONFIG = {
   tileSize: 256,
   minZoom: 0,
   maxZoom: 15,
-  attribution: '\u00A9 Copernicus GLO-30 DSM',
+  attribution: 'Terrain: Mapzen / AWS Terrain Tiles (SRTM)',
 };
 
 // Basemap sources
@@ -108,6 +110,6 @@ export const GEOCODING_CONFIG = {
 export const ATTRIBUTIONS = {
   basemap: '\u00A9 <a href="https://carto.com/">CARTO</a> \u00A9 <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   satellite: '\u00A9 <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics',
-  elevation: '\u00A9 Copernicus GLO-30 DSM',
+  elevation: 'Terrain: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Mapzen / AWS Terrain Tiles</a> (SRTM)',
   boundaries: '\u00A9 Natural Earth',
 };

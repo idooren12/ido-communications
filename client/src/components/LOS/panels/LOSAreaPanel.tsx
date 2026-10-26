@@ -2,12 +2,14 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type * as maplibregl from 'maplibre-gl';
 import { RF_FREQUENCIES } from '../../../utils/los/los';
-import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress, type Completion } from '../../../utils/los/MassiveCalculationEngine';
+import { smartCalculate, getMassiveEngine, type TaskConfig, type TaskProgress, type Completion, type TerrainInfo } from '../../../utils/los/MassiveCalculationEngine';
+import { numOr } from '../../../utils/los/parse';
+import { MAX_DEM_ZOOM } from '../../../utils/los/core/terrain';
 import { sphericalPolygonArea, type LatLon } from '../../../utils/los/geo';
 import { useLOSState, type LOSAreaParams, type LOSAreaResultData, type GridCell } from '../../../contexts/LOSContext';
 import { StreamingRasterCanvas, LOS_STATUS_COLORS, type RasterCell, type GridBounds } from '../../../utils/los/losAreaRaster';
 import { MARGINAL_CLEARANCE_M } from '../../../utils/los/core/losCore';
-import type { GridConfig } from '../../../utils/los/gridGenerator';
+import type { GridConfig, GridLayout } from '../../../utils/los/gridGenerator';
 import styles from './LOSAreaPanel.module.css';
 
 type CalculationMode = 'optical' | 'rf';
@@ -73,6 +75,8 @@ export default function LOSAreaPanel() {
   const statsRef = useRef<AreaStats>(emptyStats());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [streamStats, setStreamStats] = useState<AreaStats | null>(null);
+  const [terrainInfo, setTerrainInfo] = useState<TerrainInfo | null>(null);
+  const [failedPoints, setFailedPoints] = useState(0);
 
   useEffect(() => { pickingOriginRef.current = pickingOrigin; }, [pickingOrigin]);
   useEffect(() => { drawingPolygonRef.current = drawingPolygon; }, [drawingPolygon]);
@@ -82,6 +86,8 @@ export default function LOSAreaPanel() {
     setPreviewRasterResult(null);
     setCalcTime(null);
     setStreamStats(null);
+    setTerrainInfo(null);
+    setFailedPoints(0);
     rasterCanvasRef.current?.destroy();
     rasterCanvasRef.current = null;
   }, [lat, lon, height, targetHeight, minDistance, maxDistance, minAzimuth, maxAzimuth, resolution, calcMode, rfFrequency, polygonPoints.length, areaMode, setPreviewGridCells, setPreviewRasterResult]);
@@ -107,13 +113,15 @@ export default function LOSAreaPanel() {
       const params = editingResultData.params as LOSAreaParams;
       setLat(params.origin.lat.toFixed(6));
       setLon(params.origin.lon.toFixed(6));
-      setHeight(String(params.origin.height || 10));
-      setTargetHeight(String(params.targetHeight || 2));
-      setMinDistance(String(params.minDistance || 100));
-      setMaxDistance(String(params.maxDistance || 5000));
-      setMinAzimuth(String(params.minAzimuth || 0));
-      setMaxAzimuth(String(params.maxAzimuth || 360));
-      setResolution(String(params.resolution || 100));
+      setHeight(String(numOr(params.origin.height, 10)));
+      setTargetHeight(String(numOr(params.targetHeight, 2)));
+      // Saved distances are in metres.
+      setDistanceUnit('m');
+      setMinDistance(String(numOr(params.minDistance, 100)));
+      setMaxDistance(String(numOr(params.maxDistance, 5000)));
+      setMinAzimuth(String(numOr(params.minAzimuth, 0)));
+      setMaxAzimuth(String(numOr(params.maxAzimuth, 360)));
+      setResolution(String(numOr(params.resolution, 100)));
       if (params.mode) setCalcMode(params.mode);
       if (params.rfFrequency) setRfFrequency(params.rfFrequency);
       setGridCells([]);
@@ -123,7 +131,7 @@ export default function LOSAreaPanel() {
   }, [editingResultData, clearEditingResultData]);
 
   const toMeters = useCallback((val: string) => {
-    const n = parseFloat(val) || 0;
+    const n = numOr(val, 0);
     return distanceUnit === 'km' ? n * 1000 : n;
   }, [distanceUnit]);
 
@@ -133,7 +141,7 @@ export default function LOSAreaPanel() {
   }, [lat, lon]);
 
   const estimatedPointCount = useMemo(() => {
-    const res = parseFloat(resolution) || 100;
+    const res = Math.max(1, numOr(resolution, 100));
     const cellArea = res * res;
 
     if (areaMode === 'polygon') {
@@ -144,7 +152,7 @@ export default function LOSAreaPanel() {
 
     if (!origin) return 0;
     const minD = toMeters(minDistance), maxD = toMeters(maxDistance);
-    const minAz = parseFloat(minAzimuth) || 0, maxAz = parseFloat(maxAzimuth) || 360;
+    const minAz = numOr(minAzimuth, 0), maxAz = numOr(maxAzimuth, 360);
     const normMinAz = ((minAz % 360) + 360) % 360;
     const normMaxAz = ((maxAz % 360) + 360) % 360;
     const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
@@ -178,8 +186,8 @@ export default function LOSAreaPanel() {
 
         const minD = toMeters(minDistance);
         const maxD = toMeters(maxDistance);
-        const minAz = parseFloat(minAzimuth) || 0;
-        const maxAz = parseFloat(maxAzimuth) || 360;
+        const minAz = numOr(minAzimuth, 0);
+        const maxAz = numOr(maxAzimuth, 360);
 
         if (maxD > 0) {
           setPreviewSector({
@@ -188,7 +196,7 @@ export default function LOSAreaPanel() {
             maxDistance: maxD,
             minAzimuth: minAz,
             maxAzimuth: maxAz,
-            resolution: parseFloat(resolution) || 100,
+            resolution: Math.max(1, numOr(resolution, 100)),
             color: '#22d3ee'
           });
         }
@@ -267,19 +275,21 @@ export default function LOSAreaPanel() {
     setProgress(0);
     setGridCells([]);
     setStreamStats(null);
+    setTerrainInfo(null);
+    setFailedPoints(0);
     setPreviewRasterResult(null);
     rasterCanvasRef.current?.destroy();
     rasterCanvasRef.current = null;
     statsRef.current = emptyStats();
     const startTime = performance.now();
 
-    const res = parseFloat(resolution) || 100;
-    const hOrigin = parseFloat(height) || 10;
-    const hTarget = parseFloat(targetHeight) || 2;
+    const res = Math.max(1, numOr(resolution, 100));
+    const hOrigin = numOr(height, 10);
+    const hTarget = numOr(targetHeight, 2);
     const minD = toMeters(minDistance);
     const maxD = toMeters(maxDistance);
-    const minAz = parseFloat(minAzimuth) || 0;
-    const maxAz = parseFloat(maxAzimuth) || 360;
+    const minAz = numOr(minAzimuth, 0);
+    const maxAz = numOr(maxAzimuth, 360);
 
     // Build GridConfig for lazy point generation
     const gridConfig: GridConfig = {
@@ -346,10 +356,13 @@ export default function LOSAreaPanel() {
           }
           setProgress(prog.percent);
         },
-        onBoundsReady: (bounds: GridBounds) => {
-          if (cancelRef.current) return;
-          rasterCanvasRef.current = new StreamingRasterCanvas(bounds, res);
+        onBoundsReady: (_bounds: GridBounds, _total: number, layout: GridLayout | null) => {
+          if (cancelRef.current || !layout) return;
+          rasterCanvasRef.current = new StreamingRasterCanvas(layout);
           lastFlushTime = Date.now();
+        },
+        onTerrainReady: (info: TerrainInfo) => {
+          if (!cancelRef.current) setTerrainInfo(info);
         },
         onBatchResult: (batch: RasterCell[]) => {
           if (cancelRef.current) return;
@@ -399,6 +412,7 @@ export default function LOSAreaPanel() {
               blocked: completion.summary.blocked,
               noData: completion.summary.noData,
             });
+            setFailedPoints(completion.summary.failed);
           }
         },
         onError: (error: string) => {
@@ -437,13 +451,13 @@ export default function LOSAreaPanel() {
 
     const minD = toMeters(minDistance);
     const maxD = toMeters(maxDistance);
-    const minAz = parseFloat(minAzimuth) || 0;
-    const maxAz = parseFloat(maxAzimuth) || 360;
-    const res = parseFloat(resolution) || 100;
+    const minAz = numOr(minAzimuth, 0);
+    const maxAz = numOr(maxAzimuth, 360);
+    const res = Math.max(1, numOr(resolution, 100));
 
     const params: LOSAreaParams = {
-      origin: { lat: origin.lat, lon: origin.lon, height: parseFloat(height) || 10 },
-      targetHeight: parseFloat(targetHeight) || 2,
+      origin: { lat: origin.lat, lon: origin.lon, height: numOr(height, 10) },
+      targetHeight: numOr(targetHeight, 2),
       minDistance: minD,
       maxDistance: maxD,
       minAzimuth: minAz,
@@ -505,6 +519,8 @@ export default function LOSAreaPanel() {
   };
 
   const handleClearResults = () => {
+    setTerrainInfo(null);
+    setFailedPoints(0);
     setGridCells([]);
     setPreviewGridCells([]);
     setPreviewRasterResult(null);
@@ -713,6 +729,18 @@ export default function LOSAreaPanel() {
             </div>
           </div>
           <p className={styles.legendNote}>{t('los.losArea.legendNote', { margin: MARGINAL_CLEARANCE_M })}</p>
+          {terrainInfo && (
+            <p className={styles.legendNote}>
+              {t('los.losArea.demInfo', { zoom: terrainInfo.zoom, pixel: Math.round(terrainInfo.pixelM) })}
+              {terrainInfo.zoom < MAX_DEM_ZOOM && ` ${t('los.losArea.demCoarser')}`}
+            </p>
+          )}
+          {terrainInfo && terrainInfo.tilesFailed > 0 && (
+            <p className={styles.legendNote}><span className={styles.warning}>{t('los.losArea.tilesFailed', { count: terrainInfo.tilesFailed })}</span></p>
+          )}
+          {failedPoints > 0 && (
+            <p className={styles.legendNote}><span className={styles.warning}>{t('los.losArea.failedPoints', { count: failedPoints })}</span></p>
+          )}
           {calcTime && (
             <div className={styles.calcTime}>
               {t('los.losArea.time')}: {calcTime < 1000 ? `${calcTime.toFixed(0)}ms` : `${(calcTime/1000).toFixed(1)}s`}

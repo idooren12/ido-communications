@@ -4,11 +4,11 @@
  */
 
 import i18n from '../../i18n/config';
-import { initialBearing } from './geo';
 import { TERRAIN_CONFIG } from './constants';
-import { TerrainSampler, boundsOf, demZoomForExtent, type DemLayer } from './core/terrain';
-import { evaluateLOS, haversineMeters, hasLineOfSight, STANDARD_K, type LosStatus } from './core/losCore';
-import { loadTilesForBounds } from './core/tileLoader';
+import { TerrainSampler, MAX_DEM_ZOOM, tileKeysAlongPath, type DemLayer } from './core/terrain';
+import { evaluateLOS, hasLineOfSight, MARGINAL_CLEARANCE_M, OPTICAL_K, STANDARD_K, WORST_K, type LosStatus } from './core/losCore';
+import { geodesicDistance, greatCircleKnots } from './core/geodesy';
+import { loadTiles } from './core/tileLoader';
 
 // Re-export geo functions for backwards compatibility
 export { haversineDistance, initialBearing as calculateBearing } from './geo';
@@ -17,11 +17,16 @@ export { haversineDistance, initialBearing as calculateBearing } from './geo';
 const SPEED_OF_LIGHT = 299792458;
 const EARTH_RADIUS = 6371000;
 
+/**
+ * Refraction factors k (effective Earth radius = k * R).
+ * k > 1: the ray bends with the Earth and sees further (normal); k < 1: sub-refraction, sees less.
+ */
 export const K_FACTORS = {
-  standard: STANDARD_K, // 4/3 Earth radius for standard atmosphere
-  minimum: 0.67,     // Super-refraction
-  maximum: 4.0,      // Sub-refraction
-  none: 1.0,         // No refraction correction
+  standard: STANDARD_K, // 4/3: radio, standard atmosphere
+  optical: OPTICAL_K,   // ~1.15: visible light (refraction coefficient 0.13)
+  none: 1.0,            // no refraction (geometric line)
+  worst: WORST_K,       // 2/3: sub-refraction, the usual worst case for microwave links
+  ducting: 4.0,         // strong super-refraction (unusual)
 };
 
 // Common RF frequencies in MHz
@@ -49,6 +54,7 @@ export interface LOSProfilePoint {
   clearance: number | null;
   fresnelRadius?: number;
   fresnelClearance?: number | null;
+  fromLayer?: boolean;
 }
 
 export interface LOSObstruction {
@@ -57,7 +63,6 @@ export interface LOSObstruction {
   distance: number;
   elevation: number;
   blockageAmount: number;
-  fresnelIntrusion?: number;  // How much into Fresnel zone (%)
 }
 
 export interface LOSResult {
@@ -69,7 +74,20 @@ export interface LOSResult {
   bearing: number;
   minClearance: number | null;
   minClearanceDistance: number;
+  /** Half-width of the uncertainty band at the point of minimum clearance (metres). */
+  uncertaintyAtMin: number;
   minFresnelClearance?: number | null;
+  /** RF: lowest clearance / F1 radius (0.6 or more meets the Fresnel criterion). */
+  minFresnelRatio?: number | null;
+  /** Refraction factor the class was computed with. */
+  refractionK: number;
+  /** Worst-case refraction factor, and the lowest clearance with it (does not change the class). */
+  worstK: number;
+  minClearanceWorstK: number | null;
+  /** Ground switches between an uploaded DSM and the terrain tiles along the path. */
+  mixedSources: boolean;
+  /** DEM pixel size used, metres. */
+  pixelM: number;
   profile: LOSProfilePoint[];
   obstruction?: LOSObstruction;
   confidence: 'high' | 'medium' | 'low';
@@ -81,10 +99,10 @@ export interface LOSResult {
 }
 
 export interface ConfidenceDetails {
-  dataCompleteness: number;      // 0-1, percentage of valid samples
+  dataCompleteness: number;      // 0-1, share of samples with terrain data
   elevationVariance: number;     // Standard deviation of elevations
   suspiciousJumps: number;       // Count of unusually large elevation changes
-  interpolatedPoints: number;    // Points that were interpolated
+  interpolatedPoints: number;    // Samples without data
 }
 
 export interface ValidationResult {
@@ -94,10 +112,11 @@ export interface ValidationResult {
 }
 
 export interface LOSOptions {
+  /** Refraction factor; default 4/3 in RF mode, 1.15 in optical mode. */
   refractionK?: number;
   frequencyMHz?: number;         // RF frequency for Fresnel calculation (60 % of F1 must be clear)
   tilesUrl?: string;
-  /** DEM zoom; defaults to demZoomForExtent(distance), the same rule the area tool uses. */
+  /** DEM zoom; defaults to the finest (MAX_DEM_ZOOM) for any length. */
   zoom?: number;
 }
 
@@ -109,11 +128,7 @@ export function frequencyToWavelength(frequencyMHz: number): number {
 }
 
 /**
- * Calculate first Fresnel zone radius at a point along the path
- * @param d1 - Distance from transmitter (meters)
- * @param d2 - Distance to receiver (meters)
- * @param wavelength - Wavelength in meters
- * @returns Radius of first Fresnel zone in meters
+ * First Fresnel zone radius at a point along the path (metres).
  */
 export function calculateFresnelRadius(d1: number, d2: number, wavelength: number): number {
   const totalDistance = d1 + d2;
@@ -122,9 +137,7 @@ export function calculateFresnelRadius(d1: number, d2: number, wavelength: numbe
 }
 
 /**
- * Calculate earth curvature drop at a given point
- * @param d1 - Distance from first point
- * @param d2 - Distance to second point
+ * Earth curvature drop of a straight ray at distances d1, d2 from its ends (metres).
  */
 export function calculateCurvatureDrop(
   d1: number,
@@ -136,15 +149,46 @@ export function calculateCurvatureDrop(
 }
 
 /**
+ * How sure the answer is: how far the minimum clearance is from the uncertainty band, how
+ * complete the data is, and whether the answer holds in a worse atmosphere.
+ */
+export function assessConfidence(args: {
+  status: LosStatus;
+  minClearance: number | null;
+  uncertaintyAtMin: number;
+  minClearanceWorstK: number | null;
+  nullRatio: number;
+  suspiciousJumps: number;
+  totalSamples: number;
+  mixedSources: boolean;
+}): 'high' | 'medium' | 'low' {
+  const { status, minClearance, uncertaintyAtMin, minClearanceWorstK, nullRatio, suspiciousJumps, totalSamples, mixedSources } = args;
+  if (status === 'nodata' || status === 'marginal') return 'low';
+  if (nullRatio >= 0.15 || suspiciousJumps > totalSamples * 0.02) return 'low';
+  const band = Math.max(uncertaintyAtMin, 1);
+  const decisive = minClearance === null || Math.abs(minClearance) >= 3 * band;
+  const robustToRefraction = status === 'blocked' || minClearanceWorstK === null || minClearanceWorstK >= 0;
+  if (!decisive || !robustToRefraction || nullRatio >= 0.05 || suspiciousJumps > 0 || mixedSources) return 'medium';
+  return 'high';
+}
+
+/**
  * Line of sight between two points (with full elevation profile).
  */
 export async function calculateLOS(pointA: LOSPoint, pointB: LOSPoint, options: LOSOptions = {}): Promise<LOSResult> {
-  const totalDistance = haversineMeters(pointA.lat, pointA.lon, pointB.lat, pointB.lon);
-  const bearing = initialBearing(pointA.lat, pointA.lon, pointB.lat, pointB.lon);
-  const zoom = options.zoom ?? demZoomForExtent(totalDistance);
+  const totalDistance = geodesicDistance(pointA.lat, pointA.lon, pointB.lat, pointB.lon);
+  const zoom = options.zoom ?? MAX_DEM_ZOOM;
+  const rf = options.frequencyMHz !== undefined;
+  const refractionK = options.refractionK ?? (rf ? K_FACTORS.standard : K_FACTORS.optical);
+  // Worst case: sub-refraction for radio; no refraction at all for light.
+  const worstK = rf ? K_FACTORS.worst : K_FACTORS.none;
+
+  // Only the tiles the great circle crosses (a corridor), not its whole bounding box.
+  const knots = greatCircleKnots(pointA.lat, pointA.lon, pointB.lat, pointB.lon, Math.max(1, Math.ceil(totalDistance / 1000)));
+  const keys = tileKeysAlongPath(knots.lat, knots.lon, zoom, 2);
 
   const [tiles, layers] = await Promise.all([
-    loadTilesForBounds(boundsOf([pointA, pointB]), zoom, options.tilesUrl ?? TERRAIN_CONFIG.url),
+    loadTiles(keys, options.tilesUrl ?? TERRAIN_CONFIG.url),
     loadCustomLayers(),
   ]);
   const sampler = new TerrainSampler(zoom, tiles, layers);
@@ -153,7 +197,7 @@ export async function calculateLOS(pointA: LOSPoint, pointB: LOSPoint, options: 
     sampler,
     { lat: pointA.lat, lon: pointA.lon, height: pointA.antennaHeight },
     { lat: pointB.lat, lon: pointB.lon, height: pointB.antennaHeight },
-    { frequencyMHz: options.frequencyMHz, refractionK: options.refractionK, collectProfile: true }
+    { frequencyMHz: options.frequencyMHz, refractionK, worstK, collectProfile: true }
   );
 
   const profile: LOSProfilePoint[] = core.profile ?? [];
@@ -180,35 +224,35 @@ export async function calculateLOS(pointA: LOSPoint, pointB: LOSPoint, options: 
 
   const nullSamples = elevations.length - valid.length;
   const nullRatio = elevations.length ? nullSamples / elevations.length : 1;
-  const confidence: 'high' | 'medium' | 'low' =
-    core.status === 'nodata' ? 'low'
-      : nullRatio < 0.05 && suspiciousJumps === 0 ? 'high'
-        : nullRatio < 0.15 && suspiciousJumps < elevations.length * 0.02 ? 'medium'
-          : 'low';
-
-  const obstruction: LOSObstruction | undefined = core.obstruction
-    ? {
-        ...core.obstruction,
-        fresnelIntrusion: options.frequencyMHz
-          ? (() => {
-              const r = calculateFresnelRadius(core.obstruction.distance, totalDistance - core.obstruction.distance, frequencyToWavelength(options.frequencyMHz));
-              return r > 0 ? Math.min(100, (core.obstruction.blockageAmount / r) * 100) : undefined;
-            })()
-          : undefined,
-      }
-    : undefined;
+  const confidence = assessConfidence({
+    status: core.status,
+    minClearance: core.minClearance,
+    uncertaintyAtMin: core.uncertaintyAtMin,
+    minClearanceWorstK: core.minClearanceWorstK,
+    nullRatio,
+    suspiciousJumps,
+    totalSamples: elevations.length,
+    mixedSources: core.mixedSources,
+  });
 
   return {
     status: core.status,
     clear: hasLineOfSight(core.status),
-    fresnelClear: options.frequencyMHz ? core.status === 'clear' : undefined,
+    fresnelClear: rf ? core.status === 'clear' : undefined,
     totalDistance,
-    bearing,
+    bearing: core.bearing,
     minClearance: core.minClearance,
     minClearanceDistance: core.minClearanceDistance,
+    uncertaintyAtMin: core.uncertaintyAtMin,
     minFresnelClearance: core.minFresnelClearance,
+    minFresnelRatio: core.minFresnelRatio,
+    refractionK: core.refractionK,
+    worstK,
+    minClearanceWorstK: core.minClearanceWorstK,
+    mixedSources: core.mixedSources,
+    pixelM: core.pixelM,
     profile,
-    obstruction,
+    obstruction: core.obstruction,
     confidence,
     confidenceDetails: {
       dataCompleteness,
@@ -236,7 +280,7 @@ async function loadCustomLayers(): Promise<DemLayer[]> {
 /**
  * Validate LOS input parameters
  */
-function validateLOSInput(
+export function validateLOSInput(
   pointA: LOSPoint,
   pointB: LOSPoint,
   distance: number,
@@ -245,12 +289,10 @@ function validateLOSInput(
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  // Check coordinates are valid
   if (pointA.lat < -90 || pointA.lat > 90 || pointB.lat < -90 || pointB.lat > 90) {
     errors.push(i18n.t('los.validation.invalidCoordinates'));
   }
 
-  // Check antenna heights are reasonable
   if (pointA.antennaHeight < 0 || pointA.antennaHeight > 1000) {
     warnings.push(i18n.t('los.validation.antennaHeightA'));
   }
@@ -258,7 +300,6 @@ function validateLOSInput(
     warnings.push(i18n.t('los.validation.antennaHeightB'));
   }
 
-  // Check distance
   if (distance > 200000) {
     warnings.push(i18n.t('los.validation.longDistance'));
   }
@@ -266,28 +307,22 @@ function validateLOSInput(
     warnings.push(i18n.t('los.validation.shortDistance'));
   }
 
-  // Check data quality
   const validCount = elevations.filter(e => e !== null).length;
-  const coverage = validCount / elevations.length;
-
+  const coverage = elevations.length ? validCount / elevations.length : 0;
   if (coverage < 0.5) {
     warnings.push(i18n.t('los.validation.partialData', { percent: Math.round(coverage * 100) }));
   }
 
-  // Check for constant elevations (might indicate data issue)
   const uniqueElevations = new Set(elevations.filter(e => e !== null).map(e => Math.round(e!))).size;
   if (uniqueElevations === 1 && elevations.length > 20) {
     warnings.push(i18n.t('los.validation.constantElevation'));
   }
 
-  return {
-    valid: errors.length === 0,
-    warnings,
-    errors,
-  };
+  return { valid: errors.length === 0, warnings, errors };
 }
 
 export { formatDistance } from './geo';
+export { MARGINAL_CLEARANCE_M };
 
 /**
  * Format frequency for display

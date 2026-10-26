@@ -202,11 +202,11 @@ export default function CustomDSMPanel() {
           • GeoTIFF (.tif, .tiff)<br />
           • ESRI ASCII Grid (.asc)<br />
           • SRTM HGT (.hgt)<br />
-          • RES, IMG formats
+          • RES
         </p>
         <p>
           <strong>{t('los.dsm.coordinateSystems')}:</strong><br />
-          WGS84, ITM ({t('los.dsm.israel')})
+          {t('los.dsm.coordinateSystemsList')}
         </p>
       </div>
     </div>

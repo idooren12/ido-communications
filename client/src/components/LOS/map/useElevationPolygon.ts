@@ -81,7 +81,7 @@ export function useElevationPolygon({ setElevRange, setScaleMode }: Options) {
 
       // Sample every ~200m inside polygon
       const step = 200;
-      const latStep = metersToDegreesLat(step);
+      const latStep = metersToDegreesLat(step, (minLat + maxLat) / 2);
       const lonStep = metersToDegreesLon(step, (minLat + maxLat) / 2);
       const samplePoints: Array<{ lng: number; lat: number }> = [];
 
