@@ -187,6 +187,8 @@ const CONTROL_N = 16;
 /** Prepared lookup: WGS84 lon/lat -> fractional raster pixel, through a control grid for projected rasters. */
 interface PreparedLayer {
   layer: DemLayer;
+  /** Smallest pixel side in metres (the sampling step inside this layer is half of it). */
+  pixelM: number;
   /** Control grid of fractional pixel coords over `bounds`, (CONTROL_N+1)^2 entries each, or null for EPSG:4326. */
   cx: Float64Array | null;
   cy: Float64Array | null;
@@ -198,9 +200,18 @@ function layerCrs(layer: DemLayer): { crs: CrsCode; edges: GeoBounds; northOffse
   return { crs: 'EPSG:4326', edges: layer.bounds, northOffset: 0 };
 }
 
+function layerPixelMeters(layer: DemLayer, crs: CrsCode, edges: GeoBounds): number {
+  const w = Math.abs(edges.east - edges.west) / layer.width;
+  const h = Math.abs(edges.north - edges.south) / layer.height;
+  if (crs !== 'EPSG:4326') return Math.min(w, h);
+  const midLat = ((edges.north + edges.south) / 2) * Math.PI / 180;
+  return Math.min(w * 111320 * Math.cos(midLat), h * 110950);
+}
+
 export function prepareDemLayer(layer: DemLayer): PreparedLayer {
   const { crs, edges, northOffset } = layerCrs(layer);
-  if (crs === 'EPSG:4326') return { layer, cx: null, cy: null };
+  const pixelM = layerPixelMeters(layer, crs, edges);
+  if (crs === 'EPSG:4326') return { layer, pixelM, cx: null, cy: null };
   // Projections are smooth, so bilinear interpolation of exact pixel positions on a 16x16 grid
   // over the raster's footprint is accurate to millimetres for any raster up to a few tens of km,
   // and keeps the per-sample cost of the datum shift + projection out of the inner loop.
@@ -216,7 +227,7 @@ export function prepareDemLayer(layer: DemLayer): PreparedLayer {
       cy[j * n + i] = ((edges.north - (p.y - northOffset)) / (edges.north - edges.south)) * layer.height;
     }
   }
-  return { layer, cx, cy };
+  return { layer, pixelM, cx, cy };
 }
 
 /** Fractional raster pixel (fx, fy) of a lon/lat, or null outside the raster. */
@@ -338,6 +349,21 @@ export class TerrainSampler {
 
   get hasLayers(): boolean {
     return this.layers.length > 0;
+  }
+
+  /**
+   * Pixel size (metres) of the finest uploaded layer whose box contains this global pixel
+   * position, or Infinity outside all layers. The LOS model samples more densely there, so a
+   * narrow building in a fine DSM cannot fall between two samples.
+   */
+  layerPixelAt(gx: number, gy: number): number {
+    let best = Infinity;
+    for (let i = 0; i < this.layers.length; i++) {
+      const box = this.layerBoxes[i];
+      if (gx < box.x0 || gx > box.x1 || gy < box.y0 || gy > box.y1) continue;
+      if (this.layers[i].pixelM < best) best = this.layers[i].pixelM;
+    }
+    return best;
   }
 
   /** Packed value of one tile pixel (integer global pixel coordinates); 0 = no data. */

@@ -551,6 +551,26 @@ describe('uploaded DSM georeferencing', () => {
     expect(r.mixedSources).toBe(false); // all inside the DSM
   });
 
+  it.each([[10, 5], [4, 1], [2, 1], [30, 10]])('a %d m wide wall in a %d m DSM blocks the path (not stepped over)', (wallW, cell) => {
+    // E2E regression: a 10 m wall in a 5 m DSM fell between 16 m tile-pixel samples and the path read "clear".
+    const x0 = 219500, y0 = 630500, n = Math.round(1000 / cell), wallE = 220000.3;
+    const asc = ascGrid(`xllcorner ${x0}`, `yllcorner ${y0}`, cell, n, (_r, c) => (Math.abs(x0 + (c + 0.5) * cell - wallE) < wallW / 2 ? 840 : 800));
+    const layer = parseASCIIText('w.asc', asc).layer!;
+    const W = toWgs84('EPSG:2039', x0 + 100, 631000), E = toWgs84('EPSG:2039', x0 + 900, 631000);
+    const J = frame(W.lat, W.lon);
+    const p = { ...W, height: 2 }, q = { ...E, height: 2 };
+    const s = lineSampler(J, p, q, 800, 12, [layer]);
+    for (const collectProfile of [false, true]) {
+      const r = evaluateLOS(s, p, q, { collectProfile });
+      expect(r.status).toBe('blocked');
+      // Without a profile the model stops at the first definitely-blocked sample; with one it finds the crest.
+      if (collectProfile) expect(r.minClearance!).toBeLessThan(-30);
+    }
+    // ...and the halves on either side of the wall see each other's endpoints.
+    const westOfWall = toWgs84('EPSG:2039', wallE - wallW / 2 - 3 * cell, 631000);
+    expect(evaluateLOS(s, p, { ...westOfWall, height: 2 }).status).not.toBe('blocked');
+  });
+
   it('reads ICS (both northing conventions) and xllcenter correctly', () => {
     const itm = fromWgs84('EPSG:2039', 31.77, 35.21);
     const ics = fromWgs84('EPSG:28193', 31.77, 35.21);

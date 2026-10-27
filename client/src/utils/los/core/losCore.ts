@@ -51,6 +51,8 @@ export const ENDPOINT_CORRELATION_M = 1000;
 export const FRESNEL_CLEAR_FRACTION = 0.6;
 const SPEED_OF_LIGHT = 299792458;
 const MAX_SAMPLES = 40000;
+/** At most this many fine samples per coarse step inside an uploaded layer. */
+const MAX_SUBDIVISION = 64;
 /** Great-circle knots at most this far apart; between knots the path is straight in pixel space. */
 const KNOT_SPACING_M = 1000;
 /** More than this share of path samples without terrain data -> 'nodata'. */
@@ -216,15 +218,26 @@ export function evaluateLOS(sampler: TerrainSampler, a: LosEndpoint, b: LosEndpo
   let sawLayer = startFromLayer || endFromLayer;
   let sawTiles = !startFromLayer || !endFromLayer;
 
-  for (let i = 1; i < n; i++) {
-    const f = i / n;
-    const d1 = distance * f;
-    const d2 = distance - d1;
+  let count = 0;
+  let gx = 0, gy = 0;
+  const locate = (f: number) => {
     const u = f * segments;
     const seg = Math.min(segments - 1, Math.floor(u));
     const t = u - seg;
-    const gx = kx[seg] + (kx[seg + 1] - kx[seg]) * t;
-    const gy = ky[seg] + (ky[seg + 1] - ky[seg]) * t;
+    gx = kx[seg] + (kx[seg + 1] - kx[seg]) * t;
+    gy = ky[seg] + (ky[seg + 1] - ky[seg]) * t;
+  };
+
+  // Endpoint exclusion: half a pixel of whatever data the endpoint sits on.
+  const excludeA = startFromLayer ? Math.min(exclude, sampler.layerPixelAt(pa.x, pa.y) / 2) : exclude;
+  const excludeB = endFromLayer ? Math.min(exclude, sampler.layerPixelAt(pb.x, pb.y) / 2) : exclude;
+
+  /** Evaluate one sample at fraction f of the path. Returns true when the path is definitely blocked. */
+  const visit = (f: number): boolean => {
+    count++;
+    locate(f);
+    const d1 = distance * f;
+    const d2 = distance - d1;
     const ground = sampler.sample(gx, gy, s).value;
     const bulge = d1 * d2;
     const losHeight = h1 + (h2 - h1) * f - bulge / curvatureDenominator;
@@ -236,7 +249,7 @@ export function evaluateLOS(sampler: TerrainSampler, a: LosEndpoint, b: LosEndpo
         const ll = globalPixelToLngLat(gx, gy, z);
         profile.push({ lat: ll.lat, lon: ll.lng, distance: d1, groundElevation: null, losHeight, clearance: null, fresnelRadius, fresnelClearance: null });
       }
-      continue;
+      return false;
     }
     if (s.fromLayer) sawLayer = true; else sawTiles = true;
 
@@ -248,7 +261,7 @@ export function evaluateLOS(sampler: TerrainSampler, a: LosEndpoint, b: LosEndpo
       profile.push({ lat: ll.lat, lon: ll.lng, distance: d1, groundElevation: ground, losHeight, clearance, fresnelRadius, fresnelClearance, fromLayer: s.fromLayer });
     }
 
-    if (d1 < exclude || d2 < exclude) continue;
+    if (d1 < excludeA || d2 < excludeB) return false;
 
     const band = uncertaintyBand(d1, d2, marginM);
     if (clearance + band < minUpper) minUpper = clearance + band;
@@ -273,17 +286,37 @@ export function evaluateLOS(sampler: TerrainSampler, a: LosEndpoint, b: LosEndpo
     }
 
     // Definitely blocked: nothing later on the path can change the class.
-    if (!collect && clearance + band < 0) {
-      earlyBlocked = true;
-      break;
+    return !collect && clearance + band < 0;
+  };
+
+  // Coarse steps of half a tile pixel; a step that touches an uploaded layer is subdivided to
+  // half of that layer's pixel, so a building narrower than a tile pixel is not stepped over.
+  const coarseStepM = distance / n;
+  let prevFine = sampler.hasLayers ? (locate(0), sampler.layerPixelAt(gx, gy)) : Infinity;
+  outer:
+  for (let i = 1; i <= n; i++) {
+    const f = i / n;
+    if (sampler.hasLayers) {
+      locate(f);
+      const here = sampler.layerPixelAt(gx, gy);
+      const fine = Math.min(prevFine, here);
+      prevFine = here;
+      if (fine < Infinity && fine / 2 < coarseStepM) {
+        const sub = Math.min(MAX_SUBDIVISION, Math.ceil(coarseStepM / (fine / 2)));
+        const f0 = (i - 1) / n;
+        for (let j = 1; j < sub; j++) {
+          if (visit(f0 + j / (n * sub))) { earlyBlocked = true; break outer; }
+        }
+      }
     }
+    if (i < n && visit(f)) { earlyBlocked = true; break; }
   }
 
   if (profile) {
     profile.push({ lat: b.lat, lon: b.lon, distance, groundElevation: endGround, losHeight: h2, clearance: b.height, fresnelRadius: lambda ? 0 : undefined, fresnelClearance: lambda ? b.height : undefined, fromLayer: endFromLayer });
   }
 
-  const interior = n - 1;
+  const interior = count;
   const fin = (v: number) => (v === Infinity ? null : v);
   let status: LosStatus;
   if (!earlyBlocked && interior > 0 && missing / interior > MAX_MISSING_FRACTION) status = 'nodata';
