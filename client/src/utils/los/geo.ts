@@ -400,17 +400,27 @@ export function polygonPerimeter(polygon: LatLon[]): number {
 }
 
 /**
- * Convert meters to degrees latitude (constant)
+ * Length of one degree of latitude / longitude at a latitude, on the WGS84 ellipsoid (metres).
+ * (At 31.5N: 110,861 m and 95,029 m. The old constant 111,000 was 0.1-0.3 % off.)
  */
-export function metersToDegreesLat(meters: number): number {
-  return meters / 111000;
+export function metersPerDegreeLat(latitude: number): number {
+  const p = latitude * Math.PI / 180;
+  return 111132.92 - 559.82 * Math.cos(2 * p) + 1.175 * Math.cos(4 * p) - 0.0023 * Math.cos(6 * p);
 }
 
-/**
- * Convert meters to degrees longitude (varies with latitude)
- */
+export function metersPerDegreeLon(latitude: number): number {
+  const p = latitude * Math.PI / 180;
+  return 111412.84 * Math.cos(p) - 93.5 * Math.cos(3 * p) + 0.118 * Math.cos(5 * p);
+}
+
+/** Metres -> degrees of latitude at `latitude` (default: central Israel). */
+export function metersToDegreesLat(meters: number, latitude = 31.5): number {
+  return meters / metersPerDegreeLat(latitude);
+}
+
+/** Metres -> degrees of longitude at `latitude`. */
 export function metersToDegreesLon(meters: number, latitude: number): number {
-  return meters / (111000 * Math.cos(latitude * Math.PI / 180));
+  return meters / metersPerDegreeLon(latitude);
 }
 
 /**

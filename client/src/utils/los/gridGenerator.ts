@@ -1,16 +1,18 @@
 /**
- * Grid Generator — shared source of truth for point generation.
- * Used by both LOSAreaPanel and MassiveCalculationEngine.
+ * Grid Generator — single source of truth for the area tool's grid.
+ *
+ * The grid is regular in latitude/longitude, with steps equal to `resolution` metres at the
+ * grid's reference latitude (WGS84 metres-per-degree). `gridLayout` describes it exactly
+ * (origin, steps, row/column counts); the point generator, the bounds and the raster all
+ * derive from that one layout, so every grid point lands on its own raster pixel.
  *
  * - Lazy generator yields chunks of points (O(chunkSize) memory)
  * - Integer indices prevent float accumulation drift
- * - computeBounds provides tight bounds without scanning all points
- * - estimateTotalPoints provides mathematical count estimation
  */
 
 import { haversineDistance, initialBearing, metersToDegreesLat, metersToDegreesLon, pointInPolygon, sphericalPolygonArea } from './geo';
 import type { GridBounds } from './losAreaRaster';
-import { demZoomForExtent } from './core/terrain';
+import { boundsOf, chooseAreaZoom } from './core/terrain';
 
 export interface GridConfig {
   mode: 'sector' | 'polygon';
@@ -26,180 +28,127 @@ export interface GridConfig {
   frequencyMHz?: number;
 }
 
+/** Exact description of the grid: point (iLat, iLon) is at (latMin + iLat*latStep, lonMin + iLon*lonStep). */
+export interface GridLayout {
+  latMin: number;
+  lonMin: number;
+  latStep: number;
+  lonStep: number;
+  nLat: number;
+  nLon: number;
+}
+
+const isPolygon = (config: GridConfig) => config.mode === 'polygon' && !!config.polygonPoints && config.polygonPoints.length >= 3;
+
+export function gridLayout(config: GridConfig): GridLayout {
+  const { origin, resolution } = config;
+  if (isPolygon(config)) {
+    const b = boundsOf(config.polygonPoints!);
+    const refLat = (b.south + b.north) / 2;
+    const latStep = metersToDegreesLat(resolution, refLat);
+    const lonStep = metersToDegreesLon(resolution, refLat);
+    return {
+      latMin: b.south, lonMin: b.west, latStep, lonStep,
+      nLat: Math.floor((b.north - b.south) / latStep + 1e-9) + 1,
+      nLon: Math.floor((b.east - b.west) / lonStep + 1e-9) + 1,
+    };
+  }
+  // Sector: centred on the observer, so the observer is itself a grid node.
+  const latStep = metersToDegreesLat(resolution, origin.lat);
+  const lonStep = metersToDegreesLon(resolution, origin.lat);
+  const m = Math.max(0, Math.ceil(config.maxDistance / resolution));
+  return {
+    latMin: origin.lat - m * latStep, lonMin: origin.lon - m * lonStep, latStep, lonStep,
+    nLat: 2 * m + 1, nLon: 2 * m + 1,
+  };
+}
+
+/** Raster edges of the grid: half a step outside the outermost grid nodes. */
+export function layoutBounds(l: GridLayout): GridBounds {
+  return {
+    west: l.lonMin - l.lonStep / 2,
+    south: l.latMin - l.latStep / 2,
+    east: l.lonMin + (l.nLon - 0.5) * l.lonStep,
+    north: l.latMin + (l.nLat - 0.5) * l.latStep,
+  };
+}
+
+function sectorFilter(config: GridConfig) {
+  const { origin, minDistance, maxDistance, minAzimuth, maxAzimuth } = config;
+  const normMinAz = ((minAzimuth % 360) + 360) % 360;
+  const normMaxAz = ((maxAzimuth % 360) + 360) % 360;
+  const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
+  const fullCircle = azRange === 0 || azRange >= 360 || Math.abs(maxAzimuth - minAzimuth) >= 360;
+  return (lat: number, lon: number) => {
+    const dist = haversineDistance(origin.lat, origin.lon, lat, lon);
+    if (dist < minDistance || dist > maxDistance) return false;
+    if (fullCircle) return true;
+    const b = ((initialBearing(origin.lat, origin.lon, lat, lon) % 360) + 360) % 360;
+    return normMinAz <= normMaxAz ? b >= normMinAz && b <= normMaxAz : b >= normMinAz || b <= normMaxAz;
+  };
+}
+
 /**
- * Lazy generator — yields chunks of chunkSize points.
- * Uses integer indices (i * step instead of accumulating) for determinism.
- * Same logic as LOSAreaPanel lines 243-302 (Cartesian grid with filtering).
+ * Lazy generator — yields chunks of chunkSize points, row by row from the south.
  */
 export function* generatePointChunks(
   config: GridConfig,
   chunkSize: number,
 ): Generator<Array<{ lat: number; lon: number }>> {
-  const { origin, resolution } = config;
-  const latStep = metersToDegreesLat(resolution);
-  const lonStep = metersToDegreesLon(resolution, origin.lat);
+  const l = gridLayout(config);
+  const keep = isPolygon(config)
+    ? (lat: number, lon: number) => pointInPolygon(lat, lon, config.polygonPoints!)
+    : sectorFilter(config);
 
   let chunk: Array<{ lat: number; lon: number }> = [];
-
-  if (config.mode === 'polygon' && config.polygonPoints && config.polygonPoints.length >= 3) {
-    // Polygon mode: rectangular grid filtered by polygon containment
-    const polyPts = config.polygonPoints;
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    for (const p of polyPts) {
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-      if (p.lon < minLon) minLon = p.lon;
-      if (p.lon > maxLon) maxLon = p.lon;
-    }
-
-    // Integer indices to prevent float drift
-    const nLatSteps = Math.ceil((maxLat - minLat) / latStep) + 1;
-    const nLonSteps = Math.ceil((maxLon - minLon) / lonStep) + 1;
-
-    for (let iLat = 0; iLat < nLatSteps; iLat++) {
-      const pLat = minLat + iLat * latStep;
-      for (let iLon = 0; iLon < nLonSteps; iLon++) {
-        const pLon = minLon + iLon * lonStep;
-        if (!pointInPolygon(pLat, pLon, polyPts)) continue;
-
-        chunk.push({ lat: pLat, lon: pLon });
-        if (chunk.length >= chunkSize) {
-          yield chunk;
-          chunk = [];
-        }
-      }
-    }
-  } else {
-    // Sector mode: rectangular grid filtered by distance and azimuth
-    const { minDistance, maxDistance, minAzimuth, maxAzimuth } = config;
-
-    const latMin = origin.lat - metersToDegreesLat(maxDistance);
-    const latMax = origin.lat + metersToDegreesLat(maxDistance);
-    const lonMin = origin.lon - metersToDegreesLon(maxDistance, origin.lat);
-    const lonMax = origin.lon + metersToDegreesLon(maxDistance, origin.lat);
-
-    const normMinAz = ((minAzimuth % 360) + 360) % 360;
-    const normMaxAz = ((maxAzimuth % 360) + 360) % 360;
-    const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
-    const fullCircle = azRange === 0 || azRange >= 360;
-
-    // Integer indices to prevent float drift
-    const nLatSteps = Math.ceil((latMax - latMin) / latStep) + 1;
-    const nLonSteps = Math.ceil((lonMax - lonMin) / lonStep) + 1;
-
-    for (let iLat = 0; iLat < nLatSteps; iLat++) {
-      const pLat = latMin + iLat * latStep;
-      for (let iLon = 0; iLon < nLonSteps; iLon++) {
-        const pLon = lonMin + iLon * lonStep;
-
-        const dist = haversineDistance(origin.lat, origin.lon, pLat, pLon);
-        if (dist < minDistance || dist > maxDistance) continue;
-
-        if (!fullCircle) {
-          const bearing = initialBearing(origin.lat, origin.lon, pLat, pLon);
-          const normBearing = ((bearing % 360) + 360) % 360;
-          let inRange: boolean;
-          if (normMinAz <= normMaxAz) {
-            inRange = normBearing >= normMinAz && normBearing <= normMaxAz;
-          } else {
-            inRange = normBearing >= normMinAz || normBearing <= normMaxAz;
-          }
-          if (!inRange) continue;
-        }
-
-        chunk.push({ lat: pLat, lon: pLon });
-        if (chunk.length >= chunkSize) {
-          yield chunk;
-          chunk = [];
-        }
+  for (let iLat = 0; iLat < l.nLat; iLat++) {
+    const lat = l.latMin + iLat * l.latStep;
+    for (let iLon = 0; iLon < l.nLon; iLon++) {
+      const lon = l.lonMin + iLon * l.lonStep;
+      if (!keep(lat, lon)) continue;
+      chunk.push({ lat, lon });
+      if (chunk.length >= chunkSize) {
+        yield chunk;
+        chunk = [];
       }
     }
   }
-
-  // Yield remaining points
-  if (chunk.length > 0) {
-    yield chunk;
-  }
+  if (chunk.length > 0) yield chunk;
 }
 
-/**
- * Compute tight geographic bounds for the grid.
- * O(1) for sector (samples cardinal directions + azimuth endpoints).
- * O(n) for polygon (n = number of polygon vertices).
- */
+/** Raster bounds of the grid (exactly aligned with the grid nodes). */
 export function computeBounds(config: GridConfig): GridBounds {
-  const { origin, resolution } = config;
-  const halfLat = metersToDegreesLat(resolution) / 2;
-  const halfLon = metersToDegreesLon(resolution, origin.lat) / 2;
-
-  if (config.mode === 'polygon' && config.polygonPoints && config.polygonPoints.length >= 3) {
-    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-    for (const p of config.polygonPoints) {
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-      if (p.lon < minLon) minLon = p.lon;
-      if (p.lon > maxLon) maxLon = p.lon;
-    }
-    return {
-      west: minLon - halfLon,
-      south: minLat - halfLat,
-      east: maxLon + halfLon,
-      north: maxLat + halfLat,
-    };
-  }
-
-  // Sector mode: bounding box based on maxDistance
-  const { maxDistance } = config;
-  const latExtent = metersToDegreesLat(maxDistance);
-  const lonExtent = metersToDegreesLon(maxDistance, origin.lat);
-
-  return {
-    west: origin.lon - lonExtent - halfLon,
-    south: origin.lat - latExtent - halfLat,
-    east: origin.lon + lonExtent + halfLon,
-    north: origin.lat + latExtent + halfLat,
-  };
+  return layoutBounds(gridLayout(config));
 }
 
 /**
  * Estimate total points mathematically (without generating them).
- * Same formula as LOSAreaPanel's estimatedPointCount useMemo.
  */
 export function estimateTotalPoints(config: GridConfig): number {
   const cellArea = config.resolution * config.resolution;
-
-  if (config.mode === 'polygon' && config.polygonPoints && config.polygonPoints.length >= 3) {
-    const area = sphericalPolygonArea(config.polygonPoints);
-    return Math.ceil(area / cellArea);
+  if (isPolygon(config)) {
+    return Math.ceil(sphericalPolygonArea(config.polygonPoints!) / cellArea);
   }
-
   const { minDistance, maxDistance, minAzimuth, maxAzimuth } = config;
   const normMinAz = ((minAzimuth % 360) + 360) % 360;
   const normMaxAz = ((maxAzimuth % 360) + 360) % 360;
   const azRange = normMinAz <= normMaxAz ? normMaxAz - normMinAz : (360 - normMinAz) + normMaxAz;
-  const fullCircle = azRange === 0 || azRange >= 360;
+  const fullCircle = azRange === 0 || azRange >= 360 || Math.abs(maxAzimuth - minAzimuth) >= 360;
   const sectorFraction = fullCircle ? 1 : azRange / 360;
   const areaSquareMeters = Math.PI * (maxDistance * maxDistance - minDistance * minDistance) * sectorFraction;
   return Math.ceil(areaSquareMeters / cellArea);
 }
 
+/** Everything the rays touch: the grid and the observer (the observer may be outside a polygon). */
+export function terrainBounds(config: GridConfig): GridBounds {
+  const g = computeBounds(config);
+  return boundsOf([{ lat: g.south, lon: g.west }, { lat: g.north, lon: g.east }, config.origin]);
+}
+
 /**
- * DEM zoom for the area: based on its radius (sector) or diagonal (polygon).
+ * DEM zoom for the area: the finest zoom whose tiles over everything the rays touch fit the
+ * memory budget (zoom 12 up to a radius of ~80 km).
  */
 export function computeZoom(config: GridConfig): number {
-  const maxD = config.mode === 'polygon' && config.polygonPoints && config.polygonPoints.length >= 3
-    ? (() => {
-        let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
-        for (const p of config.polygonPoints) {
-          if (p.lat < minLat) minLat = p.lat;
-          if (p.lat > maxLat) maxLat = p.lat;
-          if (p.lon < minLon) minLon = p.lon;
-          if (p.lon > maxLon) maxLon = p.lon;
-        }
-        return haversineDistance(minLat, minLon, maxLat, maxLon);
-      })()
-    : config.maxDistance;
-
-  // Same rule as the line tool, so a point gets the same terrain in both.
-  return demZoomForExtent(maxD);
+  return chooseAreaZoom(terrainBounds(config));
 }

@@ -3,7 +3,8 @@ import {
   TILE_SIZE,
   TerrainSampler,
   decodeTerrarium,
-  demZoomForExtent,
+  chooseAreaZoom,
+  MAX_DEM_ZOOM,
   encodeTerrarium,
   globalPixelToLngLat,
   groundResolution,
@@ -62,7 +63,8 @@ describe('terrain encoding and sampling', () => {
     const plane = makeSampler((x) => 100 + 0.1 * x); // exact for bilinear
     for (const east of [0, 7, 15.3, 333, 1250]) {
       const p = at(east);
-      expect(plane.at(p.lon, p.lat)).toBeCloseTo(100 + 0.1 * east, 1);
+      // Elevations are stored in quarter-metre steps.
+      expect(Math.abs(plane.at(p.lon, p.lat)! - (100 + 0.1 * east))).toBeLessThan(0.13);
     }
   });
 
@@ -72,11 +74,17 @@ describe('terrain encoding and sampling', () => {
     expect(empty.at(p.lon, p.lat)).toBeNull();
   });
 
-  it('uses the same DEM zoom rule for line and area extents', () => {
-    expect(demZoomForExtent(500)).toBe(12);
-    expect(demZoomForExtent(60_000)).toBe(12);
-    expect(demZoomForExtent(100_000)).toBe(11);
-    expect(demZoomForExtent(300_000)).toBe(10);
+  it('keeps the finest DEM zoom for areas up to ~80 km radius, coarser only beyond the memory budget', () => {
+    const box = (km: number) => {
+      const d = (km * 1000) / M_PER_DEG_LAT, e = (km * 1000) / M_PER_DEG_LON;
+      return { west: LON0 - e, east: LON0 + e, south: LAT0 - d, north: LAT0 + d };
+    };
+    expect(MAX_DEM_ZOOM).toBe(12);
+    expect(chooseAreaZoom(box(1))).toBe(12);
+    expect(chooseAreaZoom(box(60))).toBe(12);
+    expect(chooseAreaZoom(box(75))).toBe(12);
+    expect(chooseAreaZoom(box(120))).toBe(11);
+    expect(chooseAreaZoom(box(300))).toBeLessThanOrEqual(10);
   });
 });
 
@@ -167,12 +175,14 @@ describe('evaluateLOS', () => {
 });
 
 describe('classify', () => {
-  it('maps clearances to classes', () => {
-    expect(classify(5, null, false)).toBe('clear');
-    expect(classify(-1, null, false)).toBe('marginal');
-    expect(classify(-10, null, false)).toBe('blocked');
-    expect(classify(5, -2, true)).toBe('fresnel');
-    expect(classify(5, -2, false)).toBe('clear');
+  it('maps the band-adjusted extremes to classes', () => {
+    // classify(min(clearance + band), min(clearance - band), minFresnelClearance, rf)
+    expect(classify(8, 2, null, false)).toBe('clear');
+    expect(classify(4, -2, null, false)).toBe('marginal');
+    expect(classify(-1, -7, null, false)).toBe('blocked');
+    expect(classify(8, 2, -2, true)).toBe('fresnel');
+    expect(classify(8, 2, -2, false)).toBe('clear');
+    expect(classify(null, null, null, false)).toBe('clear');
   });
 });
 

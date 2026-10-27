@@ -1,9 +1,10 @@
 /**
- * Loading Terrarium terrain tiles as raw RGBA bytes (main thread or worker).
+ * Loading Terrarium terrain tiles (main thread or worker).
+ * Tiles are decoded once to packed Uint16 elevations (see terrain.ts).
  */
 
 import { TERRAIN_CONFIG } from '../constants';
-import { tileKeysForBounds, type GeoBounds } from './terrain';
+import { packTerrariumTile, tileKeysForBounds, type GeoBounds } from './terrain';
 
 const RETRIES = 3;
 const RETRY_DELAY_MS = 400;
@@ -42,27 +43,34 @@ export async function fetchTerrariumTile(key: string, urlTemplate = TERRAIN_CONF
   return null;
 }
 
-/** Small LRU cache of decoded tiles for the line tool (one path needs only a few tiles). */
+/** Fetch one tile and decode it to packed elevations, or null. */
+export async function fetchPackedTile(key: string, urlTemplate = TERRAIN_CONFIG.url, signal?: AbortSignal): Promise<Uint16Array | null> {
+  const rgba = await fetchTerrariumTile(key, urlTemplate, signal);
+  return rgba ? packTerrariumTile(rgba) : null;
+}
+
+/** Small LRU cache of decoded tiles for the line tool and point readouts. */
 class TileCache {
-  private readonly entries = new Map<string, Promise<Uint8ClampedArray | null>>();
+  private readonly entries = new Map<string, Promise<Uint16Array | null>>();
   private readonly maxEntries: number;
 
   constructor(maxEntries: number) {
     this.maxEntries = maxEntries;
   }
 
-  get(key: string, urlTemplate: string): Promise<Uint8ClampedArray | null> {
-    const cached = this.entries.get(key);
+  get(key: string, urlTemplate: string): Promise<Uint16Array | null> {
+    const cacheKey = `${urlTemplate}|${key}`;
+    const cached = this.entries.get(cacheKey);
     if (cached) {
-      this.entries.delete(key);
-      this.entries.set(key, cached);
+      this.entries.delete(cacheKey);
+      this.entries.set(cacheKey, cached);
       return cached;
     }
-    const pending = fetchTerrariumTile(key, urlTemplate).then(data => {
-      if (data === null) this.entries.delete(key); // allow a later retry
+    const pending = fetchPackedTile(key, urlTemplate).then(data => {
+      if (data === null) this.entries.delete(cacheKey); // allow a later retry
       return data;
     });
-    this.entries.set(key, pending);
+    this.entries.set(cacheKey, pending);
     while (this.entries.size > this.maxEntries) {
       this.entries.delete(this.entries.keys().next().value as string);
     }
@@ -70,15 +78,20 @@ class TileCache {
   }
 }
 
-const lineTileCache = new TileCache(256);
+// 512 packed tiles = 64 MB at most.
+const lineTileCache = new TileCache(512);
 
-/** Load every tile covering `bounds` at zoom z (cached). */
-export async function loadTilesForBounds(bounds: GeoBounds, z: number, urlTemplate = TERRAIN_CONFIG.url): Promise<Map<string, Uint8ClampedArray>> {
-  const keys = tileKeysForBounds(bounds, z);
-  const tiles = new Map<string, Uint8ClampedArray>();
+/** Load the given tiles (cached). Missing / failed tiles are left out of the map. */
+export async function loadTiles(keys: string[], urlTemplate = TERRAIN_CONFIG.url): Promise<Map<string, Uint16Array>> {
+  const tiles = new Map<string, Uint16Array>();
   await Promise.all(keys.map(async key => {
     const data = await lineTileCache.get(key, urlTemplate);
     if (data) tiles.set(key, data);
   }));
   return tiles;
+}
+
+/** Load every tile covering `bounds` at zoom z (cached). */
+export async function loadTilesForBounds(bounds: GeoBounds, z: number, urlTemplate = TERRAIN_CONFIG.url): Promise<Map<string, Uint16Array>> {
+  return loadTiles(tileKeysForBounds(bounds, z), urlTemplate);
 }

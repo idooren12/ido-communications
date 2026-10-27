@@ -49,7 +49,8 @@ export default function CustomDSMPanel() {
     };
   }, []);
 
-  const handleFiles = useCallback(async (files: FileList) => {
+  /** Takes a plain array: a FileList is live and empties when the input is reset. */
+  const handleFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return;
 
     setUploading(true);
@@ -100,15 +101,16 @@ export default function CustomDSMPanel() {
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files) {
-      handleFiles(e.dataTransfer.files);
+      handleFiles(Array.from(e.dataTransfer.files));
     }
   }, [handleFiles]);
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      handleFiles(e.target.files);
-    }
+    // Copy before resetting the input: the reset empties the live FileList, and handleFiles
+    // only reads it after an await (the file picker used to upload nothing).
+    const files = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = ''; // allow selecting the same file again
+    handleFiles(files);
   }, [handleFiles]);
 
   const handleRemoveLayer = useCallback(async (id: string) => {
@@ -202,11 +204,11 @@ export default function CustomDSMPanel() {
           • GeoTIFF (.tif, .tiff)<br />
           • ESRI ASCII Grid (.asc)<br />
           • SRTM HGT (.hgt)<br />
-          • RES, IMG formats
+          • RES
         </p>
         <p>
           <strong>{t('los.dsm.coordinateSystems')}:</strong><br />
-          WGS84, ITM ({t('los.dsm.israel')})
+          {t('los.dsm.coordinateSystemsList')}
         </p>
       </div>
     </div>

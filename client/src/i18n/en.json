@@ -423,8 +423,15 @@
       "losLine": "LOS line",
       "fresnelBlocked": "Line of sight is clear, but the Fresnel zone is partially blocked",
       "minClearance": "Minimum clearance",
-      "marginal": "Blocked by less than {{margin}} m – within the terrain data's accuracy, may be visible",
-      "noData": "No terrain data for this path"
+      "marginal": "Within the uncertainty band (±{{margin}} m mid-path). The answer depends on metres the terrain data cannot resolve.",
+      "noData": "No terrain data for this path",
+      "atDistance": "(at {{distance}})",
+      "worstRefraction": "Poor refraction (k={{k}})",
+      "fresnelRatio": "Min. Fresnel clearance",
+      "confidence": "Confidence",
+      "model": "Model",
+      "modelValue": "k={{k}}, terrain data {{pixel}} m",
+      "mixedSources": "The path crosses between an uploaded DSM and SRTM data. Elevations may jump at the boundary."
     },
     "losArea": {
       "title": "Area Calculation",
@@ -482,8 +489,12 @@
       "heavyCalculation": "heavy calculation",
       "maxPointsExceeded": "Maximum {{max}} points",
       "fresnel": "LOS, Fresnel obstructed",
-      "marginal": "Marginal (< {{margin}} m)",
-      "legendNote": "Each cell shows the result for its centre point, using the same model as the line tool. Terrain: ~30 m elevation data that also includes some buildings and trees."
+      "marginal": "Uncertain (±{{margin}} m)",
+      "legendNote": "Each cell shows the result for its centre point, using the same model as the line tool. Terrain data is SRTM at about 30 m resolution and includes some buildings and trees. Orange: clearance within ±{{margin}} m, so the answer is uncertain.",
+      "demInfo": "Terrain data: zoom {{zoom}}, about {{pixel}} m per pixel.",
+      "demCoarser": "The area is large, so it was computed at a coarser resolution than the line tool. Check important points with the line tool.",
+      "tilesFailed": "{{count}} terrain tiles did not load. Their areas are marked as no data.",
+      "failedPoints": "{{count}} points failed to compute and are marked as no data."
     },
     "peakFinder": {
       "title": "Peak Finder",
@@ -546,7 +557,7 @@
       "layers": "Layers",
       "points": "points",
       "info": "About custom DSM",
-      "infoDescription": "Upload a high-resolution elevation model to use instead of the default terrain data in LOS calculations.",
+      "infoDescription": "Upload a high-resolution elevation model to use in line-of-sight calculations instead of the default terrain. If the model includes buildings (a DSM), antenna heights are measured above the roof, not the ground.",
       "supportedFormats": "Supported formats",
       "coordinateSystems": "Coordinate systems",
       "israel": "Israel",
@@ -559,8 +570,12 @@
         "hgtInvalidSize": "Invalid HGT file size: {{size}} values",
         "hgtNoCoordinates": "Could not read coordinates from the file name (expected e.g. N31E034.hgt)",
         "geotiffError": "Error reading GeoTIFF: {{message}}",
-        "imgUnsupported": "IMG is a complex format. Convert it to ASC or GeoTIFF with QGIS/GDAL."
-      }
+        "imgUnsupported": "IMG is a complex format. Convert it to ASC or GeoTIFF with QGIS/GDAL.",
+        "unknownCrs": "Could not tell the file's coordinate system. Supported: WGS84, Israeli TM Grid (ITM), the old Israeli grid and UTM. Saving it as a GeoTIFF with its coordinate system usually helps.",
+        "unsupportedCrs": "Coordinate system {{code}} is not supported. Convert to WGS84 or ITM (for example in QGIS).",
+        "resNoGeoref": "This RES file has no georeferencing (a header with columns, rows, corner and cell size), so it cannot be placed on the map."
+      },
+      "coordinateSystemsList": "WGS84, Israeli TM Grid (ITM), old Israeli grid (ICS), UTM. Conversions include the datum shift."
     },
     "results": {
       "title": "Current Results",

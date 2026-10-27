@@ -4,12 +4,17 @@ import { Line, XAxis, YAxis, ResponsiveContainer, Area, ComposedChart } from 're
 import { type LOSResult, RF_FREQUENCIES, calculateLOS } from '../../../utils/los/los';
 import { MARGINAL_CLEARANCE_M } from '../../../utils/los/core/losCore';
 import { losStatusColor } from '../../../utils/los/losAreaRaster';
-import { haversineDistance, initialBearing, formatDistance } from '../../../utils/los/geo';
+import { formatDistance } from '../../../utils/los/geo';
+import { geodesicDistance, initialBearingDeg } from '../../../utils/los/core/geodesy';
+import { numOr } from '../../../utils/los/parse';
 import { useLOSState, type LOSLineParams, type LOSLineResultData } from '../../../contexts/LOSContext';
 import styles from './LOSLinePanel.module.css';
 
 type PickMode = 'none' | 'A' | 'B';
 type CalculationMode = 'optical' | 'rf';
+
+/** Clearance for display: whole metres; the data is not more precise than that. */
+const formatClearance = (m: number) => (Math.abs(m) < 0.5 ? '0' : m > 0 ? `+${Math.round(m)}` : `${Math.round(m)}`);
 
 export default function LOSLinePanel() {
   const { t } = useTranslation();
@@ -59,10 +64,10 @@ export default function LOSLinePanel() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setLatA(params.pointA.lat.toFixed(6));
       setLonA(params.pointA.lon.toFixed(6));
-      setHeightA(String(params.pointA.height || 2));
+      setHeightA(String(numOr(params.pointA.height, 10)));
       setLatB(params.pointB.lat.toFixed(6));
       setLonB(params.pointB.lon.toFixed(6));
-      setHeightB(String(params.pointB.height || 2));
+      setHeightB(String(numOr(params.pointB.height, 2)));
       if (params.mode) setCalcMode(params.mode);
       if (params.rfFrequency) setRfFrequency(params.rfFrequency);
       setResult(null);
@@ -84,8 +89,8 @@ export default function LOSLinePanel() {
   const lineInfo = useMemo(() => {
     if (!pointA || !pointB) return null;
     return {
-      distance: haversineDistance(pointA.lat, pointA.lon, pointB.lat, pointB.lon),
-      bearing: initialBearing(pointA.lat, pointA.lon, pointB.lat, pointB.lon)
+      distance: geodesicDistance(pointA.lat, pointA.lon, pointB.lat, pointB.lon),
+      bearing: initialBearingDeg(pointA.lat, pointA.lon, pointB.lat, pointB.lon)
     };
   }, [pointA, pointB]);
 
@@ -157,8 +162,8 @@ export default function LOSLinePanel() {
 
       // Same model as the area tool (core/losCore.ts). One path is fast enough on the main thread.
       const res = await calculateLOS(
-        { lat: pointA.lat, lon: pointA.lon, antennaHeight: parseFloat(heightA) || 0 },
-        { lat: pointB.lat, lon: pointB.lon, antennaHeight: parseFloat(heightB) || 0 },
+        { lat: pointA.lat, lon: pointA.lon, antennaHeight: numOr(heightA, 10) },
+        { lat: pointB.lat, lon: pointB.lon, antennaHeight: numOr(heightB, 2) },
         { frequencyMHz }
       );
 
@@ -185,8 +190,8 @@ export default function LOSLinePanel() {
     if (!result || !pointA || !pointB) return;
 
     const params: LOSLineParams = {
-      pointA: { lat: pointA.lat, lon: pointA.lon, height: parseFloat(heightA) || 2 },
-      pointB: { lat: pointB.lat, lon: pointB.lon, height: parseFloat(heightB) || 2 },
+      pointA: { lat: pointA.lat, lon: pointA.lon, height: numOr(heightA, 10) },
+      pointB: { lat: pointB.lat, lon: pointB.lon, height: numOr(heightB, 2) },
       mode: calcMode,
       rfFrequency: calcMode === 'rf' ? rfFrequency : undefined,
     };
@@ -219,7 +224,8 @@ export default function LOSLinePanel() {
     if (!result) return [];
     return result.profile.map(p => ({
       distance: p.distance / 1000,
-      terrain: p.groundElevation ?? 0,
+      // null leaves a gap in the chart; 0 used to draw a fake valley down to sea level.
+      terrain: p.groundElevation,
       los: p.losHeight,
       fresnelUpper: showFresnel && p.fresnelRadius ? p.losHeight + p.fresnelRadius * 0.6 : undefined,
       fresnelLower: showFresnel && p.fresnelRadius ? p.losHeight - p.fresnelRadius * 0.6 : undefined
@@ -390,16 +396,39 @@ export default function LOSLinePanel() {
               <div className={styles.resultRow}>
                 <span>{t('los.losLine.minClearance')}</span>
                 <span className={result.minClearance < 0 ? styles.negative : styles.positive}>
-                  {result.minClearance.toFixed(1)} {t('los.common.meters')}
+                  {formatClearance(result.minClearance)} {t('los.common.meters')}
+                  {result.uncertaintyAtMin >= 0.5 && ` (±${Math.round(result.uncertaintyAtMin)})`}
+                  {' '}{t('los.losLine.atDistance', { distance: formatDistance(result.minClearanceDistance) })}
                 </span>
               </div>
             )}
-            {calcMode === 'rf' && result.minFresnelClearance != null && (
+            {result.minClearanceWorstK !== null && result.status !== 'blocked' && (
               <div className={styles.resultRow}>
-                <span>Fresnel</span>
-                <span className={result.minFresnelClearance < 0 ? styles.negative : styles.positive}>
-                  {result.minFresnelClearance.toFixed(1)} {t('los.common.meters')}
+                <span>{t('los.losLine.worstRefraction', { k: result.worstK.toFixed(2) })}</span>
+                <span className={result.minClearanceWorstK < 0 ? styles.negative : styles.positive}>
+                  {formatClearance(result.minClearanceWorstK)} {t('los.common.meters')}
                 </span>
+              </div>
+            )}
+            {calcMode === 'rf' && result.minFresnelRatio != null && (
+              <div className={styles.resultRow}>
+                <span>{t('los.losLine.fresnelRatio')}</span>
+                <span className={result.minFresnelRatio < 0.6 ? styles.negative : styles.positive}>
+                  {Math.max(-9.99, result.minFresnelRatio).toFixed(2)} F1
+                </span>
+              </div>
+            )}
+            <div className={styles.resultRow}>
+              <span>{t('los.losLine.confidence')}</span>
+              <span>{t(`los.losLine.result.${result.confidence}`)}</span>
+            </div>
+            <div className={styles.resultRow}>
+              <span>{t('los.losLine.model')}</span>
+              <span>{t('los.losLine.modelValue', { k: result.refractionK.toFixed(2), pixel: Math.round(result.pixelM) })}</span>
+            </div>
+            {result.mixedSources && (
+              <div className={styles.resultRow}>
+                <span className={styles.negative}>{t('los.losLine.mixedSources')}</span>
               </div>
             )}
             {calcTime && (

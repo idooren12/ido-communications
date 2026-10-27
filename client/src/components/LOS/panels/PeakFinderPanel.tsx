@@ -119,8 +119,8 @@ export default function PeakFinderPanel() {
       maxLon: Math.max(...lons)
     };
 
-    const latStep = metersToDegreesLat(res);
     const avgLat = (bounds.minLat + bounds.maxLat) / 2;
+    const latStep = metersToDegreesLat(res, avgLat);
     const lonStep = metersToDegreesLon(res, avgLat);
 
     // Generate grid points inside polygon

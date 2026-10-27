@@ -1,13 +1,27 @@
 /**
  * LOS Area Raster Renderer
- * Converts grid cells to a Canvas-based raster image for efficient MapLibre rendering.
- * Instead of creating thousands of GeoJSON polygon features, we paint cells onto a
- * single Canvas and use MapLibre's ImageSource for display.
+ * Paints grid cells onto a single image for MapLibre's ImageSource (instead of thousands of
+ * GeoJSON polygons).
+ *
+ * Two geometric rules make the picture land where the cells are:
+ * 1. Pixel = grid node. Columns/rows come from the grid's integer indices (GridLayout), so every
+ *    node has its own pixel and there are no empty stripes. (Before, the grid and the raster used
+ *    different metres-per-degree constants and ~0.3 % of rows/columns stayed transparent.)
+ * 2. Mercator rows. MapLibre stretches an image linearly in Web Mercator between its corners,
+ *    while the grid rows are equally spaced in latitude. The image's rows are therefore resampled
+ *    to equal Mercator steps when it is built. (Before, a 50 km radius map was drawn up to 120 m
+ *    too far north in the middle, 480 m at 100 km.)
+ *
+ * When the grid is larger than the maximum image size, several nodes share a pixel; the pixel
+ * shows the majority (visible vs not visible), ties shown as "marginal". (Before: any visible
+ * node made the whole pixel green.)
  */
 
 import type { GridCell } from '../../contexts/LOSContext';
-import { metersToDegreesLat, metersToDegreesLon } from './geo';
 import type { LosStatus } from './core/losCore';
+import { lngLatToGlobalPixel, globalPixelToLngLat } from './core/terrain';
+import { metersPerDegreeLat, metersPerDegreeLon } from './geo';
+import { layoutBounds, type GridLayout } from './gridGenerator';
 
 export interface RasterResult {
   /** Data URL or Blob URL of the PNG image */
@@ -29,17 +43,12 @@ export interface GridBounds {
   north: number;
 }
 
-// ==================== Streaming Raster Canvas ====================
+// ==================== States ====================
 
-/**
- * Pixel state enum for the state machine merge.
- * Merge rule: max(old, incoming) — commutative and associative.
- * (Grid cells map ~1:1 to pixels; the order only matters at the raster's clamped size.)
- */
 const PIXEL_EMPTY = 0;    // No cell landed on this pixel
 const PIXEL_NO_DATA = 1;
 const PIXEL_BLOCKED = 2;
-const PIXEL_MARGINAL = 3; // blocked by less than the terrain data's accuracy
+const PIXEL_MARGINAL = 3; // within the terrain data's uncertainty
 const PIXEL_FRESNEL = 4;  // RF: line of sight, Fresnel zone obstructed
 const PIXEL_CLEAR = 5;
 
@@ -54,17 +63,14 @@ export const LOS_STATUS_COLORS: Record<Exclude<LosStatus, 'nodata'>, string> = {
 export const losStatusColor = (status: LosStatus): string =>
   status === 'nodata' ? '#94a3b8' : LOS_STATUS_COLORS[status];
 
-/**
- * Color LUT: state → RGBA. NOT part of determinism contract.
- * Determinism is defined by stateBuffer content only.
- */
+/** Colour LUT: state -> RGBA. */
 const STATE_COLORS: readonly (readonly [number, number, number, number])[] = [
   [0, 0, 0, 0],          // EMPTY: transparent
-  [128, 128, 128, 100],   // NO_DATA: gray semi-transparent
-  [244, 63, 94, 200],     // BLOCKED: red
-  [249, 115, 22, 200],    // MARGINAL: orange
-  [234, 179, 8, 200],     // FRESNEL: yellow
-  [16, 185, 129, 200],    // CLEAR: green
+  [128, 128, 128, 100],  // NO_DATA: gray semi-transparent
+  [244, 63, 94, 200],    // BLOCKED: red
+  [249, 115, 22, 200],   // MARGINAL: orange
+  [234, 179, 8, 200],    // FRESNEL: yellow
+  [16, 185, 129, 200],   // CLEAR: green
 ] as const;
 
 function cellState(cell: { status?: LosStatus; clear: boolean | null; hasData?: boolean }): number {
@@ -90,55 +96,6 @@ export interface RasterCell {
   hasData: boolean;
 }
 
-/** Raster mapping configuration — shared source of truth for main thread and workers */
-export interface RasterMapping {
-  W: number;
-  H: number;
-  effLonStepDeg: number;
-  effLatStepDeg: number;
-  effectiveResolutionXM: number;
-  effectiveResolutionYM: number;
-  midLat: number;
-  bounds: GridBounds;
-}
-
-/**
- * Compute raster mapping from geographic bounds and resolution.
- * This is a pure function used by both StreamingRasterCanvas and workers (packed payload).
- * The mapping guarantees pixelX ∈ [0, W-1] and pixelY ∈ [0, H-1].
- */
-export function computeRasterMapping(bounds: GridBounds, resolution: number, maxDim = 4096): RasterMapping {
-  // Bounds validation
-  if (bounds.east <= bounds.west) throw new Error(`Invalid bounds: east (${bounds.east}) <= west (${bounds.west})`);
-  if (bounds.north <= bounds.south) throw new Error(`Invalid bounds: north (${bounds.north}) <= south (${bounds.south})`);
-
-  const midLat = (bounds.north + bounds.south) / 2;
-  const boundsWidthDeg = bounds.east - bounds.west;
-  const boundsHeightDeg = bounds.north - bounds.south;
-
-  // Step 1: requested step from resolution
-  const reqLatStepDeg = resolution / 111_320;
-  const reqLonStepDeg = resolution / (111_320 * Math.cos(midLat * Math.PI / 180));
-
-  // Step 2: requested dims
-  const reqW = Math.ceil(boundsWidthDeg / reqLonStepDeg);
-  const reqH = Math.ceil(boundsHeightDeg / reqLatStepDeg);
-
-  // Step 3: clamp dims
-  const W = Math.max(1, Math.min(reqW, maxDim));
-  const H = Math.max(1, Math.min(reqH, maxDim));
-
-  // Step 4: effective step — DERIVED from final dims (prevents pixel overflow)
-  const effLonStepDeg = boundsWidthDeg / W;
-  const effLatStepDeg = boundsHeightDeg / H;
-
-  // Step 5: effective resolution in meters (both axes)
-  const effectiveResolutionXM = effLonStepDeg * 111_320 * Math.cos(midLat * Math.PI / 180);
-  const effectiveResolutionYM = effLatStepDeg * 111_320;
-
-  return { W, H, effLonStepDeg, effLatStepDeg, effectiveResolutionXM, effectiveResolutionYM, midLat, bounds };
-}
-
 /** Cell-level statistics (exact, independent of raster resolution) */
 export interface CellStats {
   total: number;
@@ -149,39 +106,121 @@ export interface CellStats {
   noData: number;
 }
 
+// ==================== Geometry ====================
+
+export interface RasterGeometry {
+  layout: GridLayout;
+  bounds: GridBounds;
+  /** Image size. */
+  W: number;
+  H: number;
+  /** True when several grid nodes share a pixel. */
+  aggregated: boolean;
+  effectiveResolutionXM: number;
+  effectiveResolutionYM: number;
+  /** For each image row (Mercator-uniform), the grid-row-space row it shows (latitude-uniform). */
+  rowMap: Int32Array;
+}
+
+export function rasterGeometry(layout: GridLayout, maxDim = 4096): RasterGeometry {
+  if (layout.nLat < 1 || layout.nLon < 1) throw new Error('Empty grid layout');
+  const bounds = layoutBounds(layout);
+  const W = Math.min(layout.nLon, maxDim);
+  const H = Math.min(layout.nLat, maxDim);
+  const midLat = (bounds.north + bounds.south) / 2;
+
+  // Image row r covers Mercator y in [yN + r*dy, yN + (r+1)*dy]; show the lat-row at its centre.
+  const yN = lngLatToGlobalPixel(0, bounds.north, 0).y;
+  const yS = lngLatToGlobalPixel(0, bounds.south, 0).y;
+  const rowMap = new Int32Array(H);
+  for (let r = 0; r < H; r++) {
+    const lat = globalPixelToLngLat(0, yN + ((r + 0.5) / H) * (yS - yN), 0).lat;
+    const src = Math.floor(((bounds.north - lat) / (bounds.north - bounds.south)) * H);
+    rowMap[r] = Math.max(0, Math.min(H - 1, src));
+  }
+
+  return {
+    layout, bounds, W, H,
+    aggregated: W < layout.nLon || H < layout.nLat,
+    effectiveResolutionXM: (layout.lonStep * layout.nLon / W) * metersPerDegreeLon(midLat),
+    effectiveResolutionYM: (layout.latStep * layout.nLat / H) * metersPerDegreeLat(midLat),
+    rowMap,
+  };
+}
+
+/** Pixel (column, row from north, in latitude-uniform row space) of a grid node, or -1 if outside. */
+function pixelIndex(g: RasterGeometry, lat: number, lon: number): number {
+  const l = g.layout;
+  const iLon = Math.round((lon - l.lonMin) / l.lonStep);
+  const iLat = Math.round((lat - l.latMin) / l.latStep);
+  if (iLon < 0 || iLat < 0 || iLon >= l.nLon || iLat >= l.nLat) return -1;
+  const px = Math.floor((iLon * g.W) / l.nLon);
+  const py = Math.floor(((l.nLat - 1 - iLat) * g.H) / l.nLat);
+  return py * g.W + px;
+}
+
+function cornersOf(b: GridBounds): RasterResult['coordinates'] {
+  return [[b.west, b.north], [b.east, b.north], [b.east, b.south], [b.west, b.south]];
+}
+
+/** RGBA pixels of a state buffer, with rows resampled to Mercator. */
+function buildRgba(state: Uint8Array, g: RasterGeometry, out: Uint8ClampedArray): void {
+  const { W, H, rowMap } = g;
+  for (let r = 0; r < H; r++) {
+    const src = rowMap[r] * W;
+    let j = r * W * 4;
+    for (let x = 0; x < W; x++, j += 4) {
+      const c = STATE_COLORS[state[src + x]];
+      out[j] = c[0]; out[j + 1] = c[1]; out[j + 2] = c[2]; out[j + 3] = c[3];
+    }
+  }
+}
+
+// ==================== Streaming canvas ====================
+
 /**
- * StreamingRasterCanvas — zero-copy streaming raster for 100B+ point calculations.
- *
- * Architecture: state-only paint + RGBA build on flush.
- * - paintBatch/paintPackedBatch write ONLY to stateBuffer (Uint8Array)
- * - flush() builds RGBA from stateBuffer via LUT, then encodes to PNG Blob URL
- * - Single-flight: max 1 concurrent flush, with coalescing
+ * StreamingRasterCanvas — paint cells as they arrive, encode to PNG on flush.
+ * Single-flight flush (max one encode at a time, coalesced).
  */
 export class StreamingRasterCanvas {
-  private stateBuffer: Uint8Array;
-  private imageData: ImageData;
-  private canvas: OffscreenCanvas | HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-  private mapping: RasterMapping;
-  private corners: RasterResult['coordinates'];
+  private readonly geometry: RasterGeometry;
+  /** Final state per pixel (latitude-uniform row space). */
+  private readonly stateBuffer: Uint8Array;
+  /** Aggregated mode only: counts and best state per group. */
+  private readonly visCount: Uint8Array | null;
+  private readonly blkCount: Uint8Array | null;
+  private readonly visBest: Uint8Array | null;
+  private readonly blkBest: Uint8Array | null;
+  private readonly dataCount: Uint8Array | null;
+  /** Created on the first flush, so painting works (and is testable) without a canvas. */
+  private imageData: ImageData | null = null;
+  private canvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null = null;
 
   private isFlushing = false;
   private flushPending = false;
   private currentBlobUrl: string | null = null;
   private lastResult: RasterResult | null = null;
 
-  // Tracking
   dirty = false;
   dirtyCells = 0;
-  dirtyPixels = 0;
   private cellStats: CellStats = { total: 0, clear: 0, fresnel: 0, marginal: 0, blocked: 0, noData: 0 };
 
-  constructor(bounds: GridBounds, resolution: number, maxDim = 4096) {
-    this.mapping = computeRasterMapping(bounds, resolution, maxDim);
-    const { W, H } = this.mapping;
+  constructor(layout: GridLayout, maxDim = 4096) {
+    this.geometry = rasterGeometry(layout, maxDim);
+    const { W, H, aggregated } = this.geometry;
+    this.stateBuffer = new Uint8Array(W * H);
+    const n = aggregated ? W * H : 0;
+    this.visCount = aggregated ? new Uint8Array(n) : null;
+    this.blkCount = aggregated ? new Uint8Array(n) : null;
+    this.visBest = aggregated ? new Uint8Array(n) : null;
+    this.blkBest = aggregated ? new Uint8Array(n) : null;
+    this.dataCount = aggregated ? new Uint8Array(n) : null;
+  }
 
-    this.stateBuffer = new Uint8Array(W * H); // initialized to 0 (EMPTY)
-
+  private ensureCanvas() {
+    if (this.canvas && this.ctx && this.imageData) return { canvas: this.canvas, ctx: this.ctx, imageData: this.imageData };
+    const { W, H } = this.geometry;
     if (typeof OffscreenCanvas !== 'undefined') {
       this.canvas = new OffscreenCanvas(W, H);
     } else {
@@ -190,78 +229,54 @@ export class StreamingRasterCanvas {
       c.height = H;
       this.canvas = c;
     }
-
     this.ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
     if (!this.ctx) throw new Error('Could not get canvas context');
     this.imageData = this.ctx.createImageData(W, H);
-
-    this.corners = [
-      [bounds.west, bounds.north],
-      [bounds.east, bounds.north],
-      [bounds.east, bounds.south],
-      [bounds.west, bounds.south],
-    ];
+    return { canvas: this.canvas, ctx: this.ctx, imageData: this.imageData };
   }
 
-  getMapping(): RasterMapping {
-    return this.mapping;
+  getGeometry(): RasterGeometry {
+    return this.geometry;
   }
 
-  /** Paint a batch of RasterCell objects (Phase 1 path — debug/legacy after Phase 2.5) */
+  /** Paint a batch of cells. */
   paintBatch(cells: RasterCell[]): void {
-    const { W, H, effLonStepDeg, effLatStepDeg, bounds } = this.mapping;
+    const g = this.geometry;
     const sb = this.stateBuffer;
-
     for (let i = 0; i < cells.length; i++) {
       const cell = cells[i];
-      const incoming = cellState(cell);
-
-      // Cell-level stats (exact, not pixel-dependent)
-      if (incoming === PIXEL_CLEAR) this.cellStats.clear++;
-      else if (incoming === PIXEL_FRESNEL) this.cellStats.fresnel++;
-      else if (incoming === PIXEL_MARGINAL) this.cellStats.marginal++;
-      else if (incoming === PIXEL_BLOCKED) this.cellStats.blocked++;
+      const s = cellState(cell);
+      if (s === PIXEL_CLEAR) this.cellStats.clear++;
+      else if (s === PIXEL_FRESNEL) this.cellStats.fresnel++;
+      else if (s === PIXEL_MARGINAL) this.cellStats.marginal++;
+      else if (s === PIXEL_BLOCKED) this.cellStats.blocked++;
       else this.cellStats.noData++;
       this.cellStats.total++;
 
-      const px = Math.min(Math.floor((cell.lon - bounds.west) / effLonStepDeg), W - 1);
-      const py = Math.min(Math.floor((bounds.north - cell.lat) / effLatStepDeg), H - 1);
-      if (px < 0 || py < 0) continue;
-
-      const idx = py * W + px;
-      if (incoming > sb[idx]) {
-        sb[idx] = incoming;
-        this.dirtyPixels++;
+      const idx = pixelIndex(g, cell.lat, cell.lon);
+      if (idx < 0) continue;
+      if (!g.aggregated) {
+        sb[idx] = s;
+        continue;
       }
+      // Majority of nodes in this pixel; counts saturate at 255.
+      if (s === PIXEL_CLEAR || s === PIXEL_FRESNEL) {
+        if (this.visCount![idx] < 255) this.visCount![idx]++;
+        if (s > this.visBest![idx]) this.visBest![idx] = s;
+      } else if (s === PIXEL_BLOCKED || s === PIXEL_MARGINAL) {
+        if (this.blkCount![idx] < 255) this.blkCount![idx]++;
+        if (s > this.blkBest![idx]) this.blkBest![idx] = s;
+      } else if (this.dataCount![idx] < 255) {
+        this.dataCount![idx]++;
+      }
+      const v = this.visCount![idx], b = this.blkCount![idx];
+      sb[idx] = v + b === 0 ? PIXEL_NO_DATA : v > b ? this.visBest![idx] : v < b ? this.blkBest![idx] : PIXEL_MARGINAL;
     }
-
     this.dirty = true;
     this.dirtyCells += cells.length;
   }
 
-  /** Paint a packed Uint32Array from worker (Phase 2.5 default path — no float math) */
-  paintPackedBatch(packed: Uint32Array): void {
-    const sb = this.stateBuffer;
-    const W = this.mapping.W;
-
-    for (let i = 0; i < packed.length; i++) {
-      const v = packed[i];
-      const px = (v >>> 20) & 0xFFF;
-      const py = (v >>> 8) & 0xFFF;
-      const state = v & 0xFF;
-
-      const idx = py * W + px;
-      if (state > sb[idx]) {
-        sb[idx] = state;
-        this.dirtyPixels++;
-      }
-    }
-
-    this.dirty = true;
-    this.dirtyCells += packed.length;
-  }
-
-  /** Flush stateBuffer to PNG Blob URL. Single-flight: max 1 concurrent encode. */
+  /** Flush the state to a PNG Blob URL. */
   async flush(): Promise<RasterResult | null> {
     if (this.isFlushing) {
       this.flushPending = true;
@@ -270,96 +285,68 @@ export class StreamingRasterCanvas {
     this.isFlushing = true;
     this.dirty = false;
     this.dirtyCells = 0;
-    this.dirtyPixels = 0;
 
-    const { W, H, effectiveResolutionXM, effectiveResolutionYM } = this.mapping;
+    const g = this.geometry;
+    const { canvas, ctx, imageData } = this.ensureCanvas();
+    buildRgba(this.stateBuffer, g, imageData.data);
+    ctx.putImageData(imageData, 0, 0);
 
-    // Build RGBA from stateBuffer via LUT — O(W×H), cache-friendly
-    const sb = this.stateBuffer;
-    const data = this.imageData.data;
-    for (let i = 0; i < sb.length; i++) {
-      const color = STATE_COLORS[sb[i]];
-      const j = i * 4;
-      data[j] = color[0];
-      data[j + 1] = color[1];
-      data[j + 2] = color[2];
-      data[j + 3] = color[3];
-    }
-
-    this.ctx.putImageData(this.imageData, 0, 0);
-
-    // Revoke old URL before creating new
     if (this.currentBlobUrl) {
       URL.revokeObjectURL(this.currentBlobUrl);
       this.currentBlobUrl = null;
     }
 
-    // Encode to PNG via Blob URL (much cheaper than toDataURL base64)
     let url: string;
-    if (this.canvas instanceof OffscreenCanvas) {
-      const blob = await this.canvas.convertToBlob({ type: 'image/png' });
+    if (typeof OffscreenCanvas !== 'undefined' && canvas instanceof OffscreenCanvas) {
+      const blob = await canvas.convertToBlob({ type: 'image/png' });
       url = URL.createObjectURL(blob);
     } else {
-      // Fallback for browsers without OffscreenCanvas
+      const html = canvas as HTMLCanvasElement;
       url = await new Promise<string>((resolve) => {
-        (this.canvas as HTMLCanvasElement).toBlob((blob) => {
-          resolve(blob ? URL.createObjectURL(blob) : (this.canvas as HTMLCanvasElement).toDataURL('image/png'));
-        }, 'image/png');
+        html.toBlob((blob) => resolve(blob ? URL.createObjectURL(blob) : html.toDataURL('image/png')), 'image/png');
       });
     }
 
     this.currentBlobUrl = url;
     this.lastResult = {
       url,
-      coordinates: this.corners,
-      width: W,
-      height: H,
-      effectiveResolutionXM,
-      effectiveResolutionYM,
+      coordinates: cornersOf(g.bounds),
+      width: g.W,
+      height: g.H,
+      effectiveResolutionXM: g.effectiveResolutionXM,
+      effectiveResolutionYM: g.effectiveResolutionYM,
     };
-
     this.isFlushing = false;
 
-    // Only re-flush if new data arrived during encode
     if (this.flushPending && this.dirty) {
       this.flushPending = false;
       return this.flush();
     }
     this.flushPending = false;
-
     return this.lastResult;
   }
 
-  /** Get cell-level statistics (exact, not pixel-dependent) */
+  /** Cell-level statistics (exact, not pixel-dependent). */
   getCellStats(): CellStats {
     return { ...this.cellStats };
   }
 
-  /** Get pixel-level statistics (for debugging) */
+  /** Pixel-level statistics (for tests/debugging). */
   getPixelStats(): { empty: number; noData: number; blocked: number; marginal: number; fresnel: number; clear: number } {
     const counts = [0, 0, 0, 0, 0, 0];
     for (let i = 0; i < this.stateBuffer.length; i++) counts[this.stateBuffer[i]]++;
-    return {
-      empty: counts[PIXEL_EMPTY],
-      noData: counts[PIXEL_NO_DATA],
-      blocked: counts[PIXEL_BLOCKED],
-      marginal: counts[PIXEL_MARGINAL],
-      fresnel: counts[PIXEL_FRESNEL],
-      clear: counts[PIXEL_CLEAR],
-    };
+    return { empty: counts[PIXEL_EMPTY], noData: counts[PIXEL_NO_DATA], blocked: counts[PIXEL_BLOCKED], marginal: counts[PIXEL_MARGINAL], fresnel: counts[PIXEL_FRESNEL], clear: counts[PIXEL_CLEAR] };
   }
 
-  /** Get last flushed result (for saving) */
   getLastResult(): RasterResult | null {
     return this.lastResult;
   }
 
-  /** Get stateBuffer for determinism testing (SHA-256 hash) */
+  /** State buffer (latitude-uniform rows), for tests. */
   getStateBuffer(): Uint8Array {
     return this.stateBuffer;
   }
 
-  /** Clean up resources */
   destroy(): void {
     if (this.currentBlobUrl) {
       URL.revokeObjectURL(this.currentBlobUrl);
@@ -369,200 +356,50 @@ export class StreamingRasterCanvas {
   }
 }
 
-// ==================== Legacy gridToImageUrl (unchanged) ====================
+// ==================== Legacy: results saved as cells ====================
 
-/**
- * Convert grid cells to a raster image URL suitable for MapLibre ImageSource.
- *
- * Each grid cell maps to one pixel in the output image. The image is stretched
- * over the geographic bounds by MapLibre's raster layer.
- *
- * @param cells - Array of grid cells with lat/lon/clear values
- * @param resolution - Grid resolution in meters
- * @param refLat - Reference latitude for lon→degree conversion (typically origin lat)
- * @returns RasterResult with data URL and corner coordinates, or null if no valid cells
- */
-export function gridToImageUrl(
-  cells: GridCell[],
-  resolution: number,
-  refLat: number,
-): RasterResult | null {
-  if (cells.length === 0) return null;
-
-  // Compute bounds and count valid cells in a single pass (avoid extra .filter())
-  const halfLat = metersToDegreesLat(resolution) / 2;
-  const halfLon = metersToDegreesLon(resolution, refLat) / 2;
-  let minLat = Infinity, maxLat = -Infinity;
-  let minLon = Infinity, maxLon = -Infinity;
-  let validCount = 0;
-
-  for (let i = 0; i < cells.length; i++) {
-    const c = cells[i];
+/** Legacy grids were generated with 111,000 m per degree; reconstruct their layout from the cells. */
+export function legacyLayout(cells: Array<{ lat: number; lon: number; clear: boolean | null }>, resolution: number, refLat: number): GridLayout | null {
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const c of cells) {
     if (c.clear === null) continue;
-    validCount++;
     if (c.lat < minLat) minLat = c.lat;
     if (c.lat > maxLat) maxLat = c.lat;
     if (c.lon < minLon) minLon = c.lon;
     if (c.lon > maxLon) maxLon = c.lon;
   }
-
-  if (validCount === 0) return null;
-
-  const bounds: GridBounds = {
-    west: minLon - halfLon,
-    south: minLat - halfLat,
-    east: maxLon + halfLon,
-    north: maxLat + halfLat,
-  };
-  if (bounds.east <= bounds.west || bounds.north <= bounds.south) return null;
-
-  const latStep = metersToDegreesLat(resolution);
-  const lonStep = metersToDegreesLon(resolution, refLat);
-
-  // Image dimensions: one pixel per grid cell
-  const width = Math.max(1, Math.ceil((bounds.east - bounds.west) / lonStep));
-  const height = Math.max(1, Math.ceil((bounds.north - bounds.south) / latStep));
-
-  // Safety: cap canvas size to prevent memory issues
-  const maxDim = 4096;
-  if (width > maxDim || height > maxDim) {
-    const scale = maxDim / Math.max(width, height);
-    const scaledWidth = Math.max(1, Math.round(width * scale));
-    const scaledHeight = Math.max(1, Math.round(height * scale));
-    // Pass all cells directly - render functions skip null cells
-    return renderScaled(cells, bounds, scaledWidth, scaledHeight);
-  }
-
-  return render(cells, bounds, width, height, latStep, lonStep);
-}
-
-function render(
-  cells: GridCell[],
-  bounds: GridBounds,
-  width: number,
-  height: number,
-  latStep: number,
-  lonStep: number,
-): RasterResult {
-  const canvas = typeof OffscreenCanvas !== 'undefined'
-    ? new OffscreenCanvas(width, height)
-    : createFallbackCanvas(width, height);
-
-  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-  if (!ctx) throw new Error('Could not get canvas context');
-
-  const imageData = ctx.createImageData(width, height);
-  const data = imageData.data;
-
-  // Paint each cell as a single pixel
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i];
-    if (cell.clear === null) continue;
-
-    const px = Math.floor((cell.lon - bounds.west) / lonStep);
-    const py = Math.floor((bounds.north - cell.lat) / latStep);
-
-    if (px < 0 || px >= width || py < 0 || py >= height) continue;
-
-    const idx = (py * width + px) * 4;
-    const color = STATE_COLORS[cellState(cell)];
-    data[idx] = color[0];
-    data[idx + 1] = color[1];
-    data[idx + 2] = color[2];
-    data[idx + 3] = color[3];
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-
-  const url = canvasToDataUrl(canvas);
-
+  if (minLat === Infinity) return null;
+  const latStep = resolution / 111000;
+  const lonStep = resolution / (111000 * Math.cos((refLat * Math.PI) / 180));
   return {
-    url,
-    coordinates: [
-      [bounds.west, bounds.north], // top-left
-      [bounds.east, bounds.north], // top-right
-      [bounds.east, bounds.south], // bottom-right
-      [bounds.west, bounds.south], // bottom-left
-    ],
-    width,
-    height,
+    latMin: minLat, lonMin: minLon, latStep, lonStep,
+    nLat: Math.round((maxLat - minLat) / latStep) + 1,
+    nLon: Math.round((maxLon - minLon) / lonStep) + 1,
   };
 }
 
-function renderScaled(
-  cells: GridCell[],
-  bounds: GridBounds,
-  width: number,
-  height: number,
-): RasterResult {
-  const canvas = typeof OffscreenCanvas !== 'undefined'
-    ? new OffscreenCanvas(width, height)
-    : createFallbackCanvas(width, height);
-
-  const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-  if (!ctx) throw new Error('Could not get canvas context');
-
-  const imageData = ctx.createImageData(width, height);
-  const data = imageData.data;
-
-  const lonRange = bounds.east - bounds.west;
-  const latRange = bounds.north - bounds.south;
-
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i];
-    if (cell.clear === null) continue;
-
-    const px = Math.floor(((cell.lon - bounds.west) / lonRange) * width);
-    const py = Math.floor(((bounds.north - cell.lat) / latRange) * height);
-
-    if (px < 0 || px >= width || py < 0 || py >= height) continue;
-
-    const idx = (py * width + px) * 4;
-    const color = STATE_COLORS[cellState(cell)];
-    data[idx] = color[0];
-    data[idx + 1] = color[1];
-    data[idx + 2] = color[2];
-    data[idx + 3] = color[3];
+/**
+ * Raster image (data URL) for results saved as a list of cells (before the streaming raster).
+ * Same pixel and Mercator rules as the streaming canvas.
+ */
+export function gridToImageUrl(cells: GridCell[], resolution: number, refLat: number): RasterResult | null {
+  if (cells.length === 0) return null;
+  const layout = legacyLayout(cells, resolution, refLat);
+  if (!layout) return null;
+  const g = rasterGeometry(layout);
+  const state = new Uint8Array(g.W * g.H);
+  for (const c of cells) {
+    if (c.clear === null) continue;
+    const idx = pixelIndex(g, c.lat, c.lon);
+    if (idx >= 0) state[idx] = Math.max(state[idx], cellState(c));
   }
-
-  ctx.putImageData(imageData, 0, 0);
-
-  const url = canvasToDataUrl(canvas);
-
-  return {
-    url,
-    coordinates: [
-      [bounds.west, bounds.north],
-      [bounds.east, bounds.north],
-      [bounds.east, bounds.south],
-      [bounds.west, bounds.south],
-    ],
-    width,
-    height,
-  };
-}
-
-function createFallbackCanvas(width: number, height: number): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
-}
-
-function canvasToDataUrl(canvas: OffscreenCanvas | HTMLCanvasElement): string {
-  if (canvas instanceof HTMLCanvasElement) {
-    return canvas.toDataURL('image/png');
-  }
-  // OffscreenCanvas doesn't have toDataURL, so we need to use a regular canvas
-  const regular = document.createElement('canvas');
-  regular.width = canvas.width;
-  regular.height = canvas.height;
-  const ctx = regular.getContext('2d');
-  if (ctx) {
-    // Transfer OffscreenCanvas content
-    const bitmap = (canvas as OffscreenCanvas).transferToImageBitmap();
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-  }
-  return regular.toDataURL('image/png');
+  canvas.width = g.W;
+  canvas.height = g.H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Could not get canvas context');
+  const img = ctx.createImageData(g.W, g.H);
+  buildRgba(state, g, img.data);
+  ctx.putImageData(img, 0, 0);
+  return { url: canvas.toDataURL('image/png'), coordinates: cornersOf(g.bounds), width: g.W, height: g.H };
 }

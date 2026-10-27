@@ -7,9 +7,14 @@
 import { TerrainSampler, type DemLayer } from '../core/terrain';
 import { evaluateLOS, hasLineOfSight, type LosStatus } from '../core/losCore';
 
+const TILE_PIXELS = 256 * 256;
+
 export interface AreaWorkerTiles {
   zoom: number;
-  tiles: Record<string, ArrayBuffer>;
+  /** Tile keys, in the order their data appears in `packed`. */
+  keys: string[];
+  /** Packed elevations of all tiles, 65,536 values per tile (see terrain.ts). */
+  packed: Uint16Array;
   layers?: DemLayer[];
 }
 
@@ -18,6 +23,7 @@ export interface AreaWorkerCalc {
   origin: { lat: number; lon: number; height: number };
   targetHeight: number;
   freqMHz?: number;
+  refractionK?: number;
 }
 
 export interface AreaPointResult {
@@ -33,17 +39,17 @@ export interface AreaPointResult {
 let sampler: TerrainSampler | null = null;
 
 export function setTerrain(payload: AreaWorkerTiles): number {
-  const tiles = new Map<string, Uint8ClampedArray>();
-  for (const [key, buf] of Object.entries(payload.tiles)) tiles.set(key, new Uint8ClampedArray(buf));
+  const tiles = new Map<string, Uint16Array>();
+  payload.keys.forEach((key, i) => tiles.set(key, payload.packed.subarray(i * TILE_PIXELS, (i + 1) * TILE_PIXELS)));
   sampler = new TerrainSampler(payload.zoom, tiles, payload.layers ?? []);
   return tiles.size;
 }
 
 export function calcPoints(payload: AreaWorkerCalc, s: TerrainSampler | null = sampler): AreaPointResult[] {
   if (!s) throw new Error('Terrain not loaded');
-  const { origin, targetHeight, freqMHz } = payload;
+  const { origin, targetHeight, freqMHz, refractionK } = payload;
   return payload.points.map(p => {
-    const r = evaluateLOS(s, origin, { lat: p.lat, lon: p.lon, height: targetHeight }, { frequencyMHz: freqMHz });
+    const r = evaluateLOS(s, origin, { lat: p.lat, lon: p.lon, height: targetHeight }, { frequencyMHz: freqMHz, refractionK });
     const hasData = r.status !== 'nodata';
     return {
       lat: p.lat,
